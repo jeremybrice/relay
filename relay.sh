@@ -30,7 +30,41 @@ main() {
   esac
 }
 
+to_epoch() { date -d "$1" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null; }
+
+_index_update() {
+  local date="$1" digest="$2" idx="$DATA/index.md" tmp
+  tmp="$(mktemp)"
+  printf '# Session index — last %s days\n' "$RELAY_WINDOW" > "$tmp"
+  printf -- '- %s — %s → history/%s.md\n' "$date" "$digest" "$date" >> "$tmp"
+  if [ -f "$idx" ]; then
+    grep '^- ' "$idx" 2>/dev/null | grep -v "^- $date " >> "$tmp" || true
+  fi
+  { sed -n '1p' "$tmp"; grep '^- ' "$tmp" | head -n "$RELAY_WINDOW"; } > "$idx"
+  rm -f "$tmp"
+}
+
 cmd_load() { return 0; }   # filled in Task 6
-cmd_save() { return 0; }   # filled in Tasks 2-5
+
+cmd_save() {
+  local digest="$1" body date today fm handoff n=0
+  body="$(cat)"
+  date="$(date +%F)"
+  mkdir -p "$DATA/history"
+  today="$DATA/history/$date.md"
+  if [ -f "$today" ]; then
+    n=$(grep -c '^date:' "$today" 2>/dev/null) || n=0
+  fi
+  local sess=$(( n + 1 ))
+  fm="$(printf -- '---\ndate: %s\nsession: %s\ndigest: "%s"\n---' "$date" "$sess" "$digest")"
+  handoff="$(printf '%s\n\n%s' "$fm" "$body")"
+  if [ -f "$today" ]; then
+    printf '\n\n---\n\n%s\n' "$handoff" >> "$today"
+  else
+    printf '%s\n' "$handoff" > "$today"
+  fi
+  printf '%s\n' "$handoff" > "$DATA/latest.md"
+  _index_update "$date" "$digest"
+}
 
 main "$@"
