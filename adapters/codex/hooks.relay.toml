@@ -1,0 +1,3 @@
+# adapters/codex/hooks.relay.toml — merge into .codex/config.toml
+[[hooks.SessionStart]]
+command = [".relay/adapters/codex/relay-session-start.sh"]
