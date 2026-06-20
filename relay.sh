@@ -76,7 +76,45 @@ _prune() {
   return 0
 }
 
-cmd_load() { return 0; }   # filled in Task 6
+_json_escape() {
+  awk 'BEGIN{ORS=""}
+       { gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t");
+         if (NR>1) printf "\\n"; printf "%s", $0 }'
+}
+
+cmd_load() {
+  local format="${1:-text}" latest="$DATA/latest.md" idx="$DATA/index.md"
+  [ -f "$latest" ] || return 0
+  local sdate today se st days n out
+  sdate="$(sed -n 's/^date:[[:space:]]*//p' "$latest" | head -n1)"
+  today="$(date +%F)"; days=0
+  if [ -n "$sdate" ]; then
+    se="$(to_epoch "$sdate" 2>/dev/null || printf 0)"
+    st="$(to_epoch "$today" 2>/dev/null || printf 0)"
+    [ "${se:-0}" -gt 0 ] && [ "${st:-0}" -gt 0 ] && days=$(( (st - se) / 86400 ))
+  fi
+  if [ "$days" -le 0 ]; then
+    out="Last saved: ${sdate:-unknown} (today)"$'\n\n'
+  elif [ "$days" -gt "$RELAY_STALE_DAYS" ]; then
+    out="⚠ Last saved: $sdate — $days days ago"$'\n\n'
+  else
+    out="Last saved: $sdate ($days day(s) ago)"$'\n\n'
+  fi
+  n="$(wc -w < "$latest" | tr -d ' ')"
+  if [ "${n:-0}" -gt "$RELAY_WORD_CAP" ]; then
+    out="$out$(awk -v cap="$RELAY_WORD_CAP" 'BEGIN{c=0}{c+=NF;print} c>=cap{print "\n…[truncated — open .session-log/latest.md for the full handoff]"; exit}' "$latest")"
+  else
+    out="$out$(cat "$latest")"
+  fi
+  [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
+  out="$out"$'\n\nOpen .session-log/history/<date>.md for the full detail of an earlier day.'
+  if [ "$format" = "codex" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
+      "$(printf '%s' "$out" | _json_escape)"
+  else
+    printf '%s\n' "$out"
+  fi
+}
 
 cmd_save() {
   local digest="$1" body date today fm handoff n=0
