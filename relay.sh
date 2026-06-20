@@ -44,6 +44,29 @@ _index_update() {
   rm -f "$tmp"
 }
 
+_unlock() { [ -n "${DATA:-}" ] && rm -rf "$DATA/.lock" 2>/dev/null || true; }
+
+_lock() {
+  local lock="$DATA/.lock" waited=0 pid ts now
+  mkdir -p "$DATA"
+  while ! mkdir "$lock" 2>/dev/null; do
+    if [ -f "$lock/info" ]; then
+      pid="$(sed -n '1p' "$lock/info" 2>/dev/null || true)"
+      ts="$(sed -n '2p' "$lock/info" 2>/dev/null || printf 0)"
+      now="$(date +%s)"
+      if { [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; } \
+         || [ "$(( now - ${ts:-0} ))" -gt "$RELAY_LOCK_TIMEOUT" ]; then
+        rm -rf "$lock"; continue
+      fi
+    fi
+    waited=$(( waited + 1 ))
+    [ "$waited" -gt "$RELAY_LOCK_TIMEOUT" ] && { echo "relay: lock wait timeout" >&2; return 1; }
+    sleep 1
+  done
+  printf '%s\n%s\n' "$$" "$(date +%s)" > "$lock/info"
+  trap _unlock EXIT
+}
+
 _prune() {
   local n=0 f
   for f in $(ls -1 "$DATA/history"/*.md 2>/dev/null | sort -r); do
@@ -59,6 +82,7 @@ cmd_save() {
   local digest="$1" body date today fm handoff n=0
   body="$(cat)"
   date="$(date +%F)"
+  _lock || return 1            # acquire AFTER reading stdin (authoring is lock-free)
   mkdir -p "$DATA/history"
   today="$DATA/history/$date.md"
   if [ -f "$today" ]; then
@@ -75,6 +99,7 @@ cmd_save() {
   printf '%s\n' "$handoff" > "$DATA/latest.md"
   _index_update "$date" "$digest"
   _prune
+  _unlock
 }
 
 main "$@"
