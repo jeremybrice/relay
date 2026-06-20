@@ -44,6 +44,15 @@ _index_update() {
   rm -f "$tmp"
 }
 
+_prune() {
+  local n=0 f
+  for f in $(ls -1 "$DATA/history"/*.md 2>/dev/null | sort -r); do
+    n=$((n+1))
+    [ "$n" -gt "$RELAY_WINDOW" ] && rm -f "$f"
+  done
+  return 0
+}
+
 cmd_load() { return 0; }   # filled in Task 6
 
 cmd_save() {
@@ -65,6 +74,7 @@ cmd_save() {
   fi
   printf '%s\n' "$handoff" > "$DATA/latest.md"
   _index_update "$date" "$digest"
+  _prune
 }
 
 main "$@"
