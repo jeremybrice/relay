@@ -22,4 +22,5 @@ assert_file "$F/superseded/x.original.md"
 assert_contains "$(cat "$F/y.md")" "keep me"
 [ -f "$F/y.conflict" ] && { echo "FAIL: conflict file should be gone"; exit 1; }
 assert_file "$F/superseded/y.losing.md"   # the discarded side is tombstoned, not lost
+assert_contains "$(cat "$F/superseded/y.losing.md")" "discard this divergent"
 pass "knowledge resolve: keep new / keep existing, tombstone loser"
