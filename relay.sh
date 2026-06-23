@@ -6,6 +6,11 @@ RELAY_WINDOW=10
 RELAY_STALE_DAYS=3
 RELAY_WORD_CAP=800
 RELAY_LOCK_TIMEOUT=30
+RELAY_GRADUATE_AT="${RELAY_GRADUATE_AT:-3}"
+RELAY_FACTS_CAP="${RELAY_FACTS_CAP:-400}"
+RELAY_LESSONS_CAP="${RELAY_LESSONS_CAP:-400}"
+RELAY_FACT_STALE_DAYS="${RELAY_FACT_STALE_DAYS:-90}"
+RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 
 usage() {
   echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex] [--digest STR]" >&2
@@ -14,6 +19,7 @@ usage() {
 main() {
   local cmd="${1:-}"; [ $# -gt 0 ] && shift || true
   DATA="${RELAY_DIR:-$PWD/.session-log}"
+  if [ "$cmd" = knowledge ]; then cmd_knowledge "$@"; return $?; fi
   local format="text" digest=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -138,6 +144,132 @@ cmd_save() {
   _index_update "$date" "$digest"
   _prune
   _unlock
+}
+
+_slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' \
+    | tr -s '-' | sed -e 's/^-//' -e 's/-$//' | cut -c1-48
+}
+
+_fm() { sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n1; }
+
+_fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatter)
+  local tmp; tmp="$(mktemp)"
+  awk -v k="$2" -v v="$3" 'BEGIN{d=0}
+    /^---$/{d++}
+    { if(d==1 && index($0,k": ")==1){ print k": "v; next } print }' "$1" > "$tmp"
+  mv "$tmp" "$1"
+}
+
+_body() { awk 'BEGIN{d=0} /^---$/{d++; next} d>=2{print}' "$1"; }
+
+_set_body() { # file body
+  local tmp; tmp="$(mktemp)"
+  awk 'BEGIN{d=0} {print} /^---$/{d++; if(d==2) exit}' "$1" > "$tmp"
+  printf '%s\n' "$2" >> "$tmp"
+  mv "$tmp" "$1"
+}
+
+_provenance() {
+  local src sess
+  src="history/$(date +%F).md"
+  if [ -f "$DATA/latest.md" ]; then
+    sess="$(sed -n 's/^session:[[:space:]]*//p' "$DATA/latest.md" | head -n1)"
+    [ -n "$sess" ] && src="$src#session-$sess"
+  fi
+  printf '%s' "$src"
+}
+
+_days_since() {
+  local d="$1" e n
+  [ -n "$d" ] || { printf '999999'; return; }
+  e="$(to_epoch "$d" 2>/dev/null || printf 0)"; n="$(date +%s)"
+  if [ "${e:-0}" -gt 0 ]; then printf '%s' $(( (n - e) / 86400 )); else printf '999999'; fi
+}
+
+_write_lesson() { # file id seen sessions first last source body
+  printf -- '---\nid: %s\nkind: lesson\nseen: %s\nsessions: %s\nfirst_seen: %s\nlast_seen: %s\nsource: %s\nstatus: active\ngraduated_to: null\n---\n%s\n' \
+    "$2" "$3" "$4" "$5" "$6" "$7" "$8" > "$1"
+}
+
+_kindex() { # derived convenience cache; never load-bearing
+  local kd="$DATA/knowledge" idx tmp f id
+  mkdir -p "$kd"; idx="$kd/index.md"; tmp="$(mktemp)"
+  printf '# Knowledge index — derived from entry files; do not edit\n' > "$tmp"
+  for f in "$kd"/facts/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"
+    printf 'fact · %s · confirmed:%s · last:%s · ttl:%s · conflict:%s\n' \
+      "$id" "$(_fm "$f" confirmed)" "$(_fm "$f" last_confirmed)" "$(_fm "$f" ttl)" \
+      "$([ -f "$kd/facts/$id.conflict" ] && printf 1 || printf 0)" >> "$tmp"
+  done
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"
+    printf 'lesson · %s · seen:%s · sessions:%s · last:%s · status:active\n' \
+      "$id" "$(_fm "$f" seen)" "$(_fm "$f" sessions)" "$(_fm "$f" last_seen)" >> "$tmp"
+  done
+  mv "$tmp" "$idx"
+}
+
+cmd_knowledge() {
+  local kept=() ; while [ $# -gt 0 ]; do
+    case "$1" in
+      --dir) DATA="$2"; shift 2;;
+      *) kept+=("$1"); shift;;
+    esac
+  done
+  set -- ${kept[@]+"${kept[@]}"}
+  local sub="${1:-}"; [ $# -gt 0 ] && shift || true
+  case "$sub" in
+    add)        k_add "$@";;
+    *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
+  esac
+}
+
+k_add() {
+  local kind="" near=0 id="" ttl="none" rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fact)   kind="fact";   shift;;
+      --lesson) kind="lesson"; shift;;
+      --near)   near=1;        shift;;
+      --id)     id="$2";       shift 2;;
+      --ttl)    ttl="$2";      shift 2;;
+      *)        rest+=("$1");  shift;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  local body="${1:-}"
+  [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
+  [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
+  id="$(_slugify "$id")"
+  _lock || return 1
+  mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
+  if [ "$kind" = lesson ]; then _k_add_lesson "$id" "$body"; fi
+  _kindex
+  _unlock
+}
+
+_k_add_lesson() {
+  local id="$1" body="$2" f="$DATA/knowledge/lessons/$1.md" today
+  today="$(date +%F)"
+  if [ -f "$f" ]; then
+    local seen sess last
+    seen="$(_fm "$f" seen)"; sess="$(_fm "$f" sessions)"; last="$(_fm "$f" last_seen)"
+    seen=$(( ${seen:-1} + 1 ))
+    [ "$last" != "$today" ] && sess=$(( ${sess:-1} + 1 ))
+    _fm_set "$f" seen "$seen"; _fm_set "$f" sessions "$sess"; _fm_set "$f" last_seen "$today"
+    _set_body "$f" "$body"
+    echo "reinforced lesson: $id (seen:$seen sessions:$sess)"
+    if [ "$sess" -ge "$RELAY_GRADUATE_AT" ]; then
+      echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): propose 'relay knowledge graduate $id'"
+    fi
+  else
+    _write_lesson "$f" "$id" 1 1 "$today" "$today" "$(_provenance)" "$body"
+    echo "added lesson: $id (seen:1 sessions:1)"
+  fi
+  return 0   # never let a false test/[-ge] make this function exit non-zero under set -e
 }
 
 main "$@"
