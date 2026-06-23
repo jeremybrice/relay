@@ -23,9 +23,9 @@ main() {
   local format="text" digest=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --dir) DATA="$2"; shift 2;;
-      --format) format="$2"; shift 2;;
-      --digest) digest="$2"; shift 2;;
+      --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
+      --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
+      --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
     esac
   done
@@ -96,6 +96,15 @@ _uniq_dest() { # full path ending in .md -> a non-colliding path on stdout
   printf '%s' "$stem.$n.md"
 }
 
+_ttl_limit() { # raw on-disk ttl -> safe numeric day limit; anything not a small non-negative int -> default
+  local t="${1:-}"; t="${t//[[:space:]]/}"   # tolerate stray whitespace from hand-edits (e.g. "ttl: 30 ")
+  case "$t" in
+    ''|none|*[!0-9]*) printf '%s' "$RELAY_FACT_STALE_DAYS"; return ;;
+  esac
+  [ "${#t}" -le 7 ] || { printf '%s' "$RELAY_FACT_STALE_DAYS"; return; }   # >7 digits overflows [ -gt ]
+  printf '%s' "$(( 10#$t ))"   # force base-10 (no "08" octal error) and normalize leading zeros
+}
+
 _load_knowledge() {
   local kd="$DATA/knowledge" f id body conf last ttl age
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
@@ -108,7 +117,7 @@ _load_knowledge() {
     id="$(_fm "$f" id)"; conf="$(_fm "$f" confirmed)"; last="$(_fm "$f" last_confirmed)"; ttl="$(_fm "$f" ttl)"
     body="$(_body "$f" | tr '\n' ' ')"
     age="$(_days_since "$last")"
-    local lim; if [ "$ttl" != none ] && [ -n "$ttl" ]; then lim="$ttl"; else lim="$RELAY_FACT_STALE_DAYS"; fi
+    local lim; lim="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$lim" ] && exp=$(( exp + 1 ))
     [ -f "$kd/facts/$id.conflict" ] && conflicts=$(( conflicts + 1 ))
     printf '%03d\t%09d\t- %s (confirmed:%s)\n' "${conf:-1}" "$(( 999999 - age ))" "$body" "${conf:-1}" >> "$tmp"
@@ -354,14 +363,19 @@ k_resolve() {
   local keep="existing" id="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --keep) keep="$2"; shift 2;;
+      --keep) { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --keep needs a value (new|existing)" >&2; return 1; }; keep="$2"; shift 2;;
       *) rest+=("$1"); shift;;
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
   id="$(_slugify "${1:-}")"
   local f="$DATA/knowledge/facts/$id.md" cf="$DATA/knowledge/facts/$id.conflict"
+  case "$keep" in new|existing) ;; *) echo "relay: --keep must be 'new' or 'existing': $keep" >&2; return 1 ;; esac
   [ -f "$cf" ] || { echo "relay: no pending conflict for: $id" >&2; return 1; }
+  if [ "$keep" = existing ] && [ ! -f "$f" ]; then
+    echo "relay: no existing fact for '$id' to keep — only a pending conflict exists; use --keep new to promote it" >&2
+    return 1
+  fi
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts/superseded"
   if [ "$keep" = new ]; then
@@ -440,7 +454,7 @@ k_graduate() {
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
-      --dir) DATA="$2"; shift 2;;
+      --dir) [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; }; DATA="$2"; shift 2;;
       *) kept+=("$1"); shift;;
     esac
   done
@@ -467,8 +481,8 @@ k_add() {
       --fact)   kind="fact";   shift;;
       --lesson) kind="lesson"; shift;;
       --near)   near=1;        shift;;
-      --id)     id="$2";       shift 2;;
-      --ttl)    ttl="$2";      shift 2;;
+      --id)     { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --id needs a value" >&2; return 2; };  id="$2";  shift 2;;
+      --ttl)    { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --ttl needs a value" >&2; return 2; }; ttl="$2"; shift 2;;
       *)        rest+=("$1");  shift;;
     esac
   done
@@ -484,6 +498,7 @@ k_add() {
     case "$ttl" in
       ''|*[!0-9]*) echo "relay: --ttl must be 'none' or a non-negative integer (days): $ttl" >&2; return 2 ;;
     esac
+    [ "${#ttl}" -le 7 ] || { echo "relay: --ttl too large (max 7 digits): $ttl" >&2; return 2; }
   fi
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
@@ -596,7 +611,7 @@ k_prune() {
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; ttl="$(_fm "$f" ttl)"; last="$(_fm "$f" last_confirmed)"
     age="$(_days_since "$last")"
-    if [ "$ttl" != "none" ] && [ -n "$ttl" ]; then limit="$ttl"; else limit="$RELAY_FACT_STALE_DAYS"; fi
+    limit="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$limit" ] && stale="$stale$id "
   done
   if [ -z "$stale" ]; then echo "(nothing stale)"; return 0; fi
