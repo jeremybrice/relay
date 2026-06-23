@@ -88,6 +88,70 @@ _json_escape() {
          if (NR>1) printf "\\n"; printf "%s", $0 }'
 }
 
+_load_knowledge() {
+  local kd="$DATA/knowledge" f id body conf last ttl age
+  [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
+  local out="" tmp sorted total shown block exp=0 conflicts=0 today
+  today="$(date +%F)"
+
+  # ---- FACTS: rank by confirmed, then recency ----
+  tmp="$(mktemp)"
+  for f in "$kd"/facts/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"; conf="$(_fm "$f" confirmed)"; last="$(_fm "$f" last_confirmed)"; ttl="$(_fm "$f" ttl)"
+    body="$(_body "$f" | tr '\n' ' ')"
+    age="$(_days_since "$last")"
+    local lim; if [ "$ttl" != none ] && [ -n "$ttl" ]; then lim="$ttl"; else lim="$RELAY_FACT_STALE_DAYS"; fi
+    [ "$age" -gt "$lim" ] && exp=$(( exp + 1 ))
+    [ -f "$kd/facts/$id.conflict" ] && conflicts=$(( conflicts + 1 ))
+    printf '%03d\t%09d\t- %s (confirmed:%s)\n' "${conf:-1}" "$(( 999999 - age ))" "$body" "${conf:-1}" >> "$tmp"
+  done
+  if [ -s "$tmp" ]; then
+    total="$(grep -c . "$tmp" || true)"
+    sorted="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp")"   # explicit numeric keys: confirmed desc, then recency desc
+    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_FACTS_CAP" -F'\t' '
+      { line=$3; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
+    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    out="${out}## What this repo knows — facts"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total facts shown — $(( total - shown )) not loaded may include load-bearing truths; open .session-log/knowledge/facts/"$'\n'
+    out="${out}${block}"$'\n'
+    [ "$exp" -gt 0 ] && out="${out}($exp fact(s) past freshness window — run: relay knowledge prune)"$'\n'
+    [ "$conflicts" -gt 0 ] && out="${out}(⚠ $conflicts fact conflict(s) pending — run: relay knowledge resolve <id>)"$'\n'
+  fi
+  rm -f "$tmp"
+
+  # ---- LESSONS (active): rank by seen ----
+  tmp="$(mktemp)"
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    body="$(_body "$f" | tr '\n' ' ')"
+    printf '%05d\t- %s\n' "$(_fm "$f" seen)" "$body" >> "$tmp"
+  done
+  if [ -s "$tmp" ]; then
+    total="$(grep -c . "$tmp" || true)"
+    sorted="$(sort -t$'\t' -k1,1nr "$tmp")"   # explicit numeric key: seen desc
+    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_LESSONS_CAP" -F'\t' '
+      { line=$2; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
+    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    out="${out}## What this repo knows — lessons"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown — open .session-log/knowledge/lessons/"$'\n'
+    out="${out}${block}"$'\n'
+  fi
+  rm -f "$tmp"
+
+  # ---- oversized graduated-block nudge (spec §7.1 — the uncapped instruction surface) ----
+  local instr gcount
+  instr="$(_instruction_file)"
+  if [ -f "$instr" ]; then
+    gcount="$(grep -cF '<!-- relay:learned:' "$instr" 2>/dev/null || printf 0)"
+    if [ "${gcount:-0}" -ge "${RELAY_GRADUATED_SOFT:-8}" ]; then
+      out="${out}(⚠ $gcount graduated rules in $(basename "$instr") — review/consolidate via: relay knowledge list / ungraduate)"$'\n'
+    fi
+  fi
+
+  [ -n "$out" ] && printf '%s' "$out"
+}
+
 cmd_load() {
   local format="${1:-text}" latest="$DATA/latest.md" idx="$DATA/index.md"
   [ -f "$latest" ] || return 0
@@ -112,6 +176,8 @@ cmd_load() {
   else
     out="$out$(cat "$latest")"
   fi
+  local kblock; kblock="$(_load_knowledge)"
+  [ -n "$kblock" ] && out="$out"$'\n\n'"$kblock"
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nOpen .session-log/history/<date>.md for the full detail of an earlier day.'
   if [ "$format" = "codex" ]; then
