@@ -251,6 +251,26 @@ _k_add_fact() {
   return 0
 }
 
+_k_near() { # kind body
+  local dir="$DATA/knowledge/${1}s" body="$2" f id sc w words hits=""
+  [ -d "$dir" ] || { echo "(no existing ${1}s yet — safe to create a new id)"; return 0; }
+  words="$(printf '%s' "$body" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '\n' \
+            | awk 'length>=4' | sort -u)"
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"; sc=0
+    for w in $words; do grep -qiF -- "$w" "$f" && sc=$(( sc + 1 )); done
+    [ "$sc" -gt 0 ] && hits="$hits$sc $id
+"
+  done
+  if [ -n "$hits" ]; then
+    echo "Closest existing ${1} ids (reuse one as --id if it matches):"
+    printf '%s' "$hits" | sort -rn | head -n3 | awk '{printf "  - %s (overlap %s)\n",$2,$1}'
+  else
+    echo "(no near matches — safe to create a new id)"
+  fi
+}
+
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
@@ -281,6 +301,7 @@ k_add() {
   set -- ${rest[@]+"${rest[@]}"}
   local body="${1:-}"
   [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
+  if [ "$near" = 1 ]; then _k_near "$kind" "$body"; return 0; fi
   [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
   id="$(_slugify "$id")"
   _lock || return 1
