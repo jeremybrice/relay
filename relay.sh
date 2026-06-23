@@ -366,6 +366,8 @@ cmd_knowledge() {
     resolve)    k_resolve "$@";;
     list)       k_list "$@";;
     graduate)   k_graduate "$@";;
+    ungraduate) k_ungraduate "$@";;
+    supersede)  k_supersede "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
@@ -446,6 +448,49 @@ k_list() {
       fi
     done
   fi
+}
+
+_block_remove() { # file id  (idempotent)
+  local file="$1" id="$2" tmp
+  [ -f "$file" ] || return 0
+  tmp="$(mktemp)"
+  awk -v id="$id" '
+    BEGIN{ s="<!-- relay:learned:"id" -->"; e="<!-- /relay:learned:"id" -->"; skip=0 }
+    { if($0==s){skip=1; next} if(skip==1){ if($0==e) skip=0; next } print }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+k_ungraduate() {
+  local id; id="$(_slugify "${1:-}")"
+  local g="$DATA/knowledge/lessons/graduated/$id.md"
+  _lock || return 1
+  local target; target="$(_instruction_file)"
+  _block_remove "$target" "$id"
+  if [ -f "$g" ]; then
+    mkdir -p "$DATA/knowledge/lessons/superseded"
+    mv "$g" "$DATA/knowledge/lessons/superseded/$id.md"
+  fi
+  _kindex
+  _unlock
+  echo "ungraduated: $id"
+}
+
+k_supersede() {
+  local id; id="$(_slugify "${1:-}")"
+  _lock || return 1
+  local moved=0 kind
+  for kind in facts lessons; do
+    local f="$DATA/knowledge/$kind/$id.md"
+    if [ -f "$f" ]; then
+      mkdir -p "$DATA/knowledge/$kind/superseded"
+      mv "$f" "$DATA/knowledge/$kind/superseded/$id.md"
+      rm -f "$DATA/knowledge/facts/$id.conflict"
+      moved=1
+    fi
+  done
+  _kindex
+  _unlock
+  [ "$moved" = 1 ] && echo "superseded: $id" || { echo "relay: no active entry: $id" >&2; return 1; }
 }
 
 main "$@"
