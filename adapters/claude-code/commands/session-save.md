@@ -16,3 +16,8 @@ Persist a Relay handoff for the next agent.
          --digest '<<one-line digest>>'
    ```
 3. Reply: "Handoff saved for the next session."
+4. Then capture durable knowledge from this session (skip if none): for each
+   permanent repo truth run `knowledge add --fact --near` then `--fact --id <slug>`;
+   for each behavioral lesson run `knowledge add --lesson --id <slug>`. Use
+   `"$CLAUDE_PROJECT_DIR/.relay/relay.sh"` and `--dir "$CLAUDE_PROJECT_DIR/.session-log"`.
+   If the tool says a lesson is graduation-ready, offer graduation in one line.

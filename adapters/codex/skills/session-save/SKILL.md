@@ -16,3 +16,7 @@ Persist a Relay handoff for the next agent.
          --digest '<<one-line digest>>'
    ```
 3. Reply: "Handoff saved for the next session."
+4. Then capture durable knowledge (skip if none): facts via
+   `knowledge add --fact --near` then `--fact --id <slug>`; lessons via
+   `knowledge add --lesson --id <slug>`, using `"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
+   and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"`. Offer graduation only when prompted and approved.
