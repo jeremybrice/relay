@@ -311,6 +311,7 @@ cmd_knowledge() {
   case "$sub" in
     add)        k_add "$@";;
     resolve)    k_resolve "$@";;
+    list)       k_list "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
@@ -359,6 +360,38 @@ _k_add_lesson() {
     echo "added lesson: $id (seen:1 sessions:1)"
   fi
   return 0   # never let a false test/[-ge] make this function exit non-zero under set -e
+}
+
+k_list() {
+  local kd="$DATA/knowledge" f id g
+  _lock || return 1
+  _kindex
+  _unlock
+  [ -d "$kd" ] || { echo "(no knowledge yet)"; return 0; }
+  echo "Facts:"
+  for f in "$kd"/facts/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"
+    printf '  - %s (confirmed:%s)%s\n' "$id" "$(_fm "$f" confirmed)" \
+      "$([ -f "$kd/facts/$id.conflict" ] && printf '  ⚠ conflict — resolve %s' "$id")"
+  done
+  echo "Lessons (active):"
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    printf '  - %s (seen:%s sessions:%s)\n' "$(_fm "$f" id)" "$(_fm "$f" seen)" "$(_fm "$f" sessions)"
+  done
+  if [ -d "$kd/lessons/graduated" ]; then
+    echo "Lessons (graduated):"
+    for f in "$kd"/lessons/graduated/*.md; do
+      [ -e "$f" ] || continue
+      id="$(_fm "$f" id)"; g="$(_fm "$f" graduated_to)"
+      if [ -n "$g" ] && [ -f "$g" ] && grep -qF "<!-- relay:learned:$id -->" "$g"; then
+        printf '  - %s → %s\n' "$id" "$g"
+      else
+        printf '  - %s  ⚠ DRIFT: graduated rule missing from %s — re-graduate or supersede\n' "$id" "$g"
+      fi
+    done
+  fi
 }
 
 main "$@"
