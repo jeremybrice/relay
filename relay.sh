@@ -435,6 +435,8 @@ cmd_knowledge() {
     ungraduate) k_ungraduate "$@";;
     supersede)  k_supersede "$@";;
     prune)      k_prune "$@";;
+    why)        k_why "$@";;
+    export)     k_export "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
@@ -579,6 +581,28 @@ k_prune() {
     echo "Stale facts (past freshness window) — run 'relay knowledge prune --yes' to retire:"
     for id in $stale; do echo "  - $id"; done
   fi
+}
+
+k_why() {
+  local id; id="$(_slugify "${1:-}")"
+  local f="" k
+  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && f="$DATA/knowledge/$k/$id.md"; done
+  [ -n "$f" ] || { echo "relay: no entry: $id" >&2; return 1; }
+  echo "--- entry ---"; cat "$f"
+  local src; src="$(_fm "$f" source)"
+  local hist="${src%%#*}"
+  if [ -n "$hist" ] && [ -f "$DATA/$hist" ]; then
+    echo; echo "--- came from $src ---"; sed -n '1,40p' "$DATA/$hist"
+  fi
+}
+
+k_export() {
+  local kd="$DATA/knowledge" f
+  echo "# Relay knowledge pack — $(date +%F)"
+  echo; echo "## Facts"
+  for f in "$kd"/facts/*.md; do [ -e "$f" ] || continue; echo; echo "### $(_fm "$f" id)"; _body "$f"; done
+  echo; echo "## Lessons"
+  for f in "$kd"/lessons/*.md; do [ -e "$f" ] || continue; echo; echo "### $(_fm "$f" id)"; _body "$f"; done
 }
 
 main "$@"
