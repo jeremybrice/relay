@@ -23,9 +23,9 @@ main() {
   local format="text" digest=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --dir) DATA="$2"; shift 2;;
-      --format) format="$2"; shift 2;;
-      --digest) digest="$2"; shift 2;;
+      --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
+      --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
+      --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
     esac
   done
@@ -96,6 +96,15 @@ _uniq_dest() { # full path ending in .md -> a non-colliding path on stdout
   printf '%s' "$stem.$n.md"
 }
 
+_ttl_limit() { # raw on-disk ttl -> safe numeric day limit; anything not a small non-negative int -> default
+  local t="${1:-}"; t="${t//[[:space:]]/}"   # tolerate stray whitespace from hand-edits (e.g. "ttl: 30 ")
+  case "$t" in
+    ''|none|*[!0-9]*) printf '%s' "$RELAY_FACT_STALE_DAYS"; return ;;
+  esac
+  [ "${#t}" -le 7 ] || { printf '%s' "$RELAY_FACT_STALE_DAYS"; return; }   # >7 digits overflows [ -gt ]
+  printf '%s' "$(( 10#$t ))"   # force base-10 (no "08" octal error) and normalize leading zeros
+}
+
 _load_knowledge() {
   local kd="$DATA/knowledge" f id body conf last ttl age
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
@@ -108,7 +117,7 @@ _load_knowledge() {
     id="$(_fm "$f" id)"; conf="$(_fm "$f" confirmed)"; last="$(_fm "$f" last_confirmed)"; ttl="$(_fm "$f" ttl)"
     body="$(_body "$f" | tr '\n' ' ')"
     age="$(_days_since "$last")"
-    local lim; if [ "$ttl" != none ] && [ -n "$ttl" ]; then lim="$ttl"; else lim="$RELAY_FACT_STALE_DAYS"; fi
+    local lim; lim="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$lim" ] && exp=$(( exp + 1 ))
     [ -f "$kd/facts/$id.conflict" ] && conflicts=$(( conflicts + 1 ))
     printf '%03d\t%09d\t- %s (confirmed:%s)\n' "${conf:-1}" "$(( 999999 - age ))" "$body" "${conf:-1}" >> "$tmp"
@@ -150,13 +159,14 @@ _load_knowledge() {
   local instr gcount
   instr="$(_instruction_file)"
   if [ -f "$instr" ]; then
-    gcount="$(grep -cF '<!-- relay:learned:' "$instr" 2>/dev/null || printf 0)"
+    gcount="$(grep -cF '<!-- relay:learned:' "$instr" 2>/dev/null)" || gcount=0
     if [ "${gcount:-0}" -ge "${RELAY_GRADUATED_SOFT:-8}" ]; then
       out="${out}(⚠ $gcount graduated rules in $(basename "$instr") — review/consolidate via: relay knowledge list / ungraduate)"$'\n'
     fi
   fi
 
   [ -n "$out" ] && printf '%s' "$out"
+  return 0
 }
 
 cmd_load() {
@@ -221,7 +231,7 @@ cmd_save() {
 
 _slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' \
-    | tr -s '-' | sed -e 's/^-//' -e 's/-$//' | cut -c1-48
+    | tr -s '-' | sed -e 's/^-//' -e 's/-$//'
 }
 
 _fm() { sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n1; }
@@ -291,15 +301,20 @@ _write_fact() { # file id confirmed first last ttl source body
 }
 
 _dice() { # bodyA bodyB -> integer 0..100 (Dice coefficient over unique lowercase tokens)
-  awk -v A="$1" -v B="$2" 'BEGIN{
-    na=split(tolower(A),aa,/[^a-z0-9]+/); nb=split(tolower(B),bb,/[^a-z0-9]+/);
-    for(i=1;i<=na;i++) if(aa[i]!="") sa[aa[i]]=1;
-    for(i=1;i<=nb;i++) if(bb[i]!="") sb[bb[i]]=1;
-    ca=0; for(k in sa) ca++; cb=0; for(k in sb) cb++;
-    inter=0; for(k in sa) if(k in sb) inter++;
-    if(ca+cb==0){print 0; exit}
-    printf "%d", (inter*200)/(ca+cb);
-  }'
+  # Bodies MUST be passed via files, not `awk -v`: BSD/POSIX awk rejects a newline
+  # inside a -v value, which would hard-fail similarity on any multi-line body.
+  local fa fb r
+  fa="$(mktemp)"; fb="$(mktemp)"
+  printf '%s' "$1" > "$fa"; printf '%s' "$2" > "$fb"
+  r="$(awk '
+    FNR==NR { n=split(tolower($0),w,/[^a-z0-9]+/); for(i=1;i<=n;i++) if(w[i]!="") sa[w[i]]=1; next }
+            { n=split(tolower($0),w,/[^a-z0-9]+/); for(i=1;i<=n;i++) if(w[i]!="") sb[w[i]]=1 }
+    END{ ca=0; for(k in sa) ca++; cb=0; for(k in sb) cb++;
+         inter=0; for(k in sa) if(k in sb) inter++;
+         if(ca+cb==0){ print 0; exit }
+         printf "%d", (inter*200)/(ca+cb) }' "$fa" "$fb")"
+  rm -f "$fa" "$fb"
+  printf '%s' "$r"
 }
 
 _similar() { [ "$(_dice "$1" "$2")" -ge 50 ]; }
@@ -348,20 +363,30 @@ k_resolve() {
   local keep="existing" id="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --keep) keep="$2"; shift 2;;
+      --keep) { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --keep needs a value (new|existing)" >&2; return 1; }; keep="$2"; shift 2;;
       *) rest+=("$1"); shift;;
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
   id="$(_slugify "${1:-}")"
   local f="$DATA/knowledge/facts/$id.md" cf="$DATA/knowledge/facts/$id.conflict"
+  case "$keep" in new|existing) ;; *) echo "relay: --keep must be 'new' or 'existing': $keep" >&2; return 1 ;; esac
   [ -f "$cf" ] || { echo "relay: no pending conflict for: $id" >&2; return 1; }
+  if [ "$keep" = existing ] && [ ! -f "$f" ]; then
+    echo "relay: no existing fact for '$id' to keep — only a pending conflict exists; use --keep new to promote it" >&2
+    return 1
+  fi
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts/superseded"
   if [ "$keep" = new ]; then
-    cp "$f" "$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.original.md")"
-    _set_body "$f" "$(cat "$cf")"
-    _fm_set "$f" last_confirmed "$(date +%F)"
+    if [ -f "$f" ]; then
+      cp "$f" "$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.original.md")"
+      _set_body "$f" "$(cat "$cf")"
+      _fm_set "$f" last_confirmed "$(date +%F)"
+    else
+      # orphan conflict (fact .md gone): promote the conflict body to a fresh fact
+      _write_fact "$f" "$id" 1 "$(date +%F)" "$(date +%F)" none "$(_provenance)" "$(cat "$cf")"
+    fi
   else
     local dest; dest="$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.losing.md")"
     printf -- '---\nid: %s\nkind: fact\nstatus: superseded\nsource: %s\n---\n%s\n' \
@@ -429,7 +454,7 @@ k_graduate() {
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
-      --dir) DATA="$2"; shift 2;;
+      --dir) [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; }; DATA="$2"; shift 2;;
       *) kept+=("$1"); shift;;
     esac
   done
@@ -456,8 +481,8 @@ k_add() {
       --fact)   kind="fact";   shift;;
       --lesson) kind="lesson"; shift;;
       --near)   near=1;        shift;;
-      --id)     id="$2";       shift 2;;
-      --ttl)    ttl="$2";      shift 2;;
+      --id)     { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --id needs a value" >&2; return 2; };  id="$2";  shift 2;;
+      --ttl)    { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --ttl needs a value" >&2; return 2; }; ttl="$2"; shift 2;;
       *)        rest+=("$1");  shift;;
     esac
   done
@@ -467,6 +492,14 @@ k_add() {
   if [ "$near" = 1 ]; then _k_near "$kind" "$body"; return 0; fi
   [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
   id="$(_slugify "$id")"
+  [ -n "$id" ] || { echo "relay: --id slugifies to empty (need [a-z0-9] characters)" >&2; return 2; }
+  [ "${#id}" -le 48 ] || { echo "relay: --id too long (${#id} chars after slugify; max 48): $id" >&2; return 2; }
+  if [ "$ttl" != none ]; then
+    case "$ttl" in
+      ''|*[!0-9]*) echo "relay: --ttl must be 'none' or a non-negative integer (days): $ttl" >&2; return 2 ;;
+    esac
+    [ "${#ttl}" -le 7 ] || { echo "relay: --ttl too large (max 7 digits): $ttl" >&2; return 2; }
+  fi
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
   if [ "$kind" = lesson ]; then _k_add_lesson "$id" "$body"; else _k_add_fact "$id" "$body" "$ttl"; fi
@@ -561,7 +594,7 @@ k_supersede() {
     if [ -f "$f" ]; then
       mkdir -p "$DATA/knowledge/$kind/superseded"
       mv "$f" "$(_uniq_dest "$DATA/knowledge/$kind/superseded/$id.md")"
-      rm -f "$DATA/knowledge/facts/$id.conflict"
+      rm -f "$DATA/knowledge/$kind/$id.conflict"
       moved=1
     fi
   done
@@ -578,7 +611,7 @@ k_prune() {
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; ttl="$(_fm "$f" ttl)"; last="$(_fm "$f" last_confirmed)"
     age="$(_days_since "$last")"
-    if [ "$ttl" != "none" ] && [ -n "$ttl" ]; then limit="$ttl"; else limit="$RELAY_FACT_STALE_DAYS"; fi
+    limit="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$limit" ] && stale="$stale$id "
   done
   if [ -z "$stale" ]; then echo "(nothing stale)"; return 0; fi
@@ -594,7 +627,7 @@ k_prune() {
 k_why() {
   local id; id="$(_slugify "${1:-}")"
   local f="" k
-  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && f="$DATA/knowledge/$k/$id.md"; done
+  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
   [ -n "$f" ] || { echo "relay: no entry: $id" >&2; return 1; }
   echo "--- entry ---"; cat "$f"
   local src; src="$(_fm "$f" source)"
