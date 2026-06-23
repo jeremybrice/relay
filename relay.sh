@@ -271,6 +271,34 @@ _k_near() { # kind body
   fi
 }
 
+k_resolve() {
+  local keep="existing" id="" rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep) keep="$2"; shift 2;;
+      *) rest+=("$1"); shift;;
+    esac
+  done
+  set -- ${rest[@]+"${rest[@]}"}
+  id="$(_slugify "${1:-}")"
+  local f="$DATA/knowledge/facts/$id.md" cf="$DATA/knowledge/facts/$id.conflict"
+  [ -f "$cf" ] || { echo "relay: no pending conflict for: $id" >&2; return 1; }
+  _lock || return 1
+  mkdir -p "$DATA/knowledge/facts/superseded"
+  if [ "$keep" = new ]; then
+    cp "$f" "$DATA/knowledge/facts/superseded/$id.original.md"
+    _set_body "$f" "$(cat "$cf")"
+    _fm_set "$f" last_confirmed "$(date +%F)"
+  else
+    printf -- '---\nid: %s\nkind: fact\nstatus: superseded\nsource: %s\n---\n%s\n' \
+      "$id" "$(_provenance)" "$(cat "$cf")" > "$DATA/knowledge/facts/superseded/$id.losing.md"
+  fi
+  rm -f "$cf"
+  _kindex
+  _unlock
+  echo "resolved: $id (kept $keep)"
+}
+
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
@@ -282,6 +310,7 @@ cmd_knowledge() {
   local sub="${1:-}"; [ $# -gt 0 ] && shift || true
   case "$sub" in
     add)        k_add "$@";;
+    resolve)    k_resolve "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
