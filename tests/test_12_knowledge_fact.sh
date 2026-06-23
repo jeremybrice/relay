@@ -15,6 +15,7 @@ assert_contains "$(cat "$F/deploy-release-script.md")" "ttl: none"
 out="$("$RELAY" knowledge add --fact --id deploy-release-script "Deploys ship through scripts/release.sh and never npm publish directly." --dir "$DIR")"
 assert_contains "$out" "confirmed: deploy-release-script"
 assert_contains "$(cat "$F/deploy-release-script.md")" "confirmed: 2"
+assert_contains "$(cat "$F/deploy-release-script.md")" "scripts/release.sh"
 
 # re-assert a DIVERGENT body on the same id → conflict, NOT overwrite
 out="$("$RELAY" knowledge add --fact --id deploy-release-script "Auth lives in src/auth/session.ts and uses JWT." --dir "$DIR")"
