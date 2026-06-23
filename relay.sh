@@ -212,6 +212,45 @@ _kindex() { # derived convenience cache; never load-bearing
   mv "$tmp" "$idx"
 }
 
+_write_fact() { # file id confirmed first last ttl source body
+  printf -- '---\nid: %s\nkind: fact\nconfirmed: %s\nfirst_seen: %s\nlast_confirmed: %s\nttl: %s\nsource: %s\nstatus: active\n---\n%s\n' \
+    "$2" "$3" "$4" "$5" "$6" "$7" "$8" > "$1"
+}
+
+_dice() { # bodyA bodyB -> integer 0..100 (Dice coefficient over unique lowercase tokens)
+  awk -v A="$1" -v B="$2" 'BEGIN{
+    na=split(tolower(A),aa,/[^a-z0-9]+/); nb=split(tolower(B),bb,/[^a-z0-9]+/);
+    for(i=1;i<=na;i++) if(aa[i]!="") sa[aa[i]]=1;
+    for(i=1;i<=nb;i++) if(bb[i]!="") sb[bb[i]]=1;
+    ca=0; for(k in sa) ca++; cb=0; for(k in sb) cb++;
+    inter=0; for(k in sa) if(k in sb) inter++;
+    if(ca+cb==0){print 0; exit}
+    printf "%d", (inter*200)/(ca+cb);
+  }'
+}
+
+_similar() { [ "$(_dice "$1" "$2")" -ge 50 ]; }
+
+_k_add_fact() {
+  local id="$1" body="$2" ttl="${3:-none}" f="$DATA/knowledge/facts/$1.md" today
+  today="$(date +%F)"
+  if [ -f "$f" ]; then
+    if _similar "$(_body "$f")" "$body"; then
+      local c; c="$(_fm "$f" confirmed)"; c=$(( ${c:-1} + 1 ))
+      _fm_set "$f" confirmed "$c"; _fm_set "$f" last_confirmed "$today"
+      [ "$ttl" != none ] && _fm_set "$f" ttl "$ttl"    # refresh freshness window if the agent re-set it
+      echo "confirmed: $id (confirmed:$c)"
+    else
+      printf '%s\n' "$body" > "$DATA/knowledge/facts/$id.conflict"
+      echo "⚠ conflict raised for fact: $id — run: relay knowledge resolve $id"
+    fi
+  else
+    _write_fact "$f" "$id" 1 "$today" "$today" "$ttl" "$(_provenance)" "$body"
+    echo "added fact: $id"
+  fi
+  return 0
+}
+
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
@@ -246,7 +285,7 @@ k_add() {
   id="$(_slugify "$id")"
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
-  if [ "$kind" = lesson ]; then _k_add_lesson "$id" "$body"; fi
+  if [ "$kind" = lesson ]; then _k_add_lesson "$id" "$body"; else _k_add_fact "$id" "$body" "$ttl"; fi
   _kindex
   _unlock
 }
