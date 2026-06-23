@@ -793,10 +793,13 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
    "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --near '<fact text>' \
      --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
    ```
-3. Write it with a short stable kebab-case `--id`:
+3. Write it with a short stable kebab-case `--id` (a fact reuses any id surfaced above):
 
    ```bash
-   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<text>' \
+   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
+     --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
+   # or a lesson:
+   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
      --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
    ```
 4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>` — only with the user's okay.

@@ -13,4 +13,6 @@ assert_contains "$out" 'hello from codex'
 assert_contains "$(cat "$SRC/adapters/codex/hooks.relay.toml")" "SessionStart"
 assert_contains "$(cat "$SRC/adapters/codex/skills/session-save/SKILL.md")" "relay.sh"
 assert_contains "$(cat "$SRC/adapters/codex/AGENTS.relay.md")" "session-log"
+# relay-learn records a FACT with --fact --id (regression: issue #3 — was --lesson)
+assert_contains "$(cat "$SRC/adapters/codex/skills/relay-learn/SKILL.md")" "knowledge add --fact --id"
 pass "codex adapter"
