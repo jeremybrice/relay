@@ -1,0 +1,8 @@
+
+# >>> relay >>>
+.session-log/
+
+# dogfooding + local harness artifacts (relay installed into its own repo)
+# source of truth for adapters lives in adapters/claude-code/ and adapters/codex/
+.relay/
+.claude/
