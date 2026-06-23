@@ -151,13 +151,14 @@ _load_knowledge() {
   local instr gcount
   instr="$(_instruction_file)"
   if [ -f "$instr" ]; then
-    gcount="$(grep -cF '<!-- relay:learned:' "$instr" 2>/dev/null || printf 0)"
+    gcount="$(grep -cF '<!-- relay:learned:' "$instr" 2>/dev/null)" || gcount=0
     if [ "${gcount:-0}" -ge "${RELAY_GRADUATED_SOFT:-8}" ]; then
       out="${out}(⚠ $gcount graduated rules in $(basename "$instr") — review/consolidate via: relay knowledge list / ungraduate)"$'\n'
     fi
   fi
 
   [ -n "$out" ] && printf '%s' "$out"
+  return 0
 }
 
 cmd_load() {
@@ -222,7 +223,7 @@ cmd_save() {
 
 _slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' \
-    | tr -s '-' | sed -e 's/^-//' -e 's/-$//' | cut -c1-48
+    | tr -s '-' | sed -e 's/^-//' -e 's/-$//'
 }
 
 _fm() { sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n1; }
@@ -292,15 +293,20 @@ _write_fact() { # file id confirmed first last ttl source body
 }
 
 _dice() { # bodyA bodyB -> integer 0..100 (Dice coefficient over unique lowercase tokens)
-  awk -v A="$1" -v B="$2" 'BEGIN{
-    na=split(tolower(A),aa,/[^a-z0-9]+/); nb=split(tolower(B),bb,/[^a-z0-9]+/);
-    for(i=1;i<=na;i++) if(aa[i]!="") sa[aa[i]]=1;
-    for(i=1;i<=nb;i++) if(bb[i]!="") sb[bb[i]]=1;
-    ca=0; for(k in sa) ca++; cb=0; for(k in sb) cb++;
-    inter=0; for(k in sa) if(k in sb) inter++;
-    if(ca+cb==0){print 0; exit}
-    printf "%d", (inter*200)/(ca+cb);
-  }'
+  # Bodies MUST be passed via files, not `awk -v`: BSD/POSIX awk rejects a newline
+  # inside a -v value, which would hard-fail similarity on any multi-line body.
+  local fa fb r
+  fa="$(mktemp)"; fb="$(mktemp)"
+  printf '%s' "$1" > "$fa"; printf '%s' "$2" > "$fb"
+  r="$(awk '
+    FNR==NR { n=split(tolower($0),w,/[^a-z0-9]+/); for(i=1;i<=n;i++) if(w[i]!="") sa[w[i]]=1; next }
+            { n=split(tolower($0),w,/[^a-z0-9]+/); for(i=1;i<=n;i++) if(w[i]!="") sb[w[i]]=1 }
+    END{ ca=0; for(k in sa) ca++; cb=0; for(k in sb) cb++;
+         inter=0; for(k in sa) if(k in sb) inter++;
+         if(ca+cb==0){ print 0; exit }
+         printf "%d", (inter*200)/(ca+cb) }' "$fa" "$fb")"
+  rm -f "$fa" "$fb"
+  printf '%s' "$r"
 }
 
 _similar() { [ "$(_dice "$1" "$2")" -ge 50 ]; }
@@ -360,9 +366,14 @@ k_resolve() {
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts/superseded"
   if [ "$keep" = new ]; then
-    cp "$f" "$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.original.md")"
-    _set_body "$f" "$(cat "$cf")"
-    _fm_set "$f" last_confirmed "$(date +%F)"
+    if [ -f "$f" ]; then
+      cp "$f" "$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.original.md")"
+      _set_body "$f" "$(cat "$cf")"
+      _fm_set "$f" last_confirmed "$(date +%F)"
+    else
+      # orphan conflict (fact .md gone): promote the conflict body to a fresh fact
+      _write_fact "$f" "$id" 1 "$(date +%F)" "$(date +%F)" none "$(_provenance)" "$(cat "$cf")"
+    fi
   else
     local dest; dest="$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.losing.md")"
     printf -- '---\nid: %s\nkind: fact\nstatus: superseded\nsource: %s\n---\n%s\n' \
@@ -468,6 +479,13 @@ k_add() {
   if [ "$near" = 1 ]; then _k_near "$kind" "$body"; return 0; fi
   [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
   id="$(_slugify "$id")"
+  [ -n "$id" ] || { echo "relay: --id slugifies to empty (need [a-z0-9] characters)" >&2; return 2; }
+  [ "${#id}" -le 48 ] || { echo "relay: --id too long (${#id} chars after slugify; max 48): $id" >&2; return 2; }
+  if [ "$ttl" != none ]; then
+    case "$ttl" in
+      ''|*[!0-9]*) echo "relay: --ttl must be 'none' or a non-negative integer (days): $ttl" >&2; return 2 ;;
+    esac
+  fi
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
   if [ "$kind" = lesson ]; then _k_add_lesson "$id" "$body"; else _k_add_fact "$id" "$body" "$ttl"; fi
@@ -562,7 +580,7 @@ k_supersede() {
     if [ -f "$f" ]; then
       mkdir -p "$DATA/knowledge/$kind/superseded"
       mv "$f" "$(_uniq_dest "$DATA/knowledge/$kind/superseded/$id.md")"
-      rm -f "$DATA/knowledge/facts/$id.conflict"
+      rm -f "$DATA/knowledge/$kind/$id.conflict"
       moved=1
     fi
   done
@@ -595,7 +613,7 @@ k_prune() {
 k_why() {
   local id; id="$(_slugify "${1:-}")"
   local f="" k
-  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && f="$DATA/knowledge/$k/$id.md"; done
+  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
   [ -n "$f" ] || { echo "relay: no entry: $id" >&2; return 1; }
   echo "--- entry ---"; cat "$f"
   local src; src="$(_fm "$f" source)"
