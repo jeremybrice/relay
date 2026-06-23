@@ -89,11 +89,18 @@ _json_escape() {
          if (NR>1) printf "\\n"; printf "%s", $0 }'
 }
 
+_uniq_dest() { # full path ending in .md -> a non-colliding path on stdout
+  local p="$1" stem n
+  [ -e "$p" ] || { printf '%s' "$p"; return; }   # free → use as-is (first tombstone keeps base name)
+  stem="${p%.md}"; n=2
+  while [ -e "$stem.$n.md" ]; do n=$(( n + 1 )); done
+  printf '%s' "$stem.$n.md"
+}
+
 _load_knowledge() {
   local kd="$DATA/knowledge" f id body conf last ttl age
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
-  local out="" tmp sorted total shown block exp=0 conflicts=0 today
-  today="$(date +%F)"
+  local out="" tmp sorted total shown block exp=0 conflicts=0
 
   # ---- FACTS: rank by confirmed, then recency ----
   tmp="$(mktemp)"
@@ -353,12 +360,13 @@ k_resolve() {
   _lock || return 1
   mkdir -p "$DATA/knowledge/facts/superseded"
   if [ "$keep" = new ]; then
-    cp "$f" "$DATA/knowledge/facts/superseded/$id.original.md"
+    cp "$f" "$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.original.md")"
     _set_body "$f" "$(cat "$cf")"
     _fm_set "$f" last_confirmed "$(date +%F)"
   else
+    local dest; dest="$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.losing.md")"
     printf -- '---\nid: %s\nkind: fact\nstatus: superseded\nsource: %s\n---\n%s\n' \
-      "$id" "$(_provenance)" "$(cat "$cf")" > "$DATA/knowledge/facts/superseded/$id.losing.md"
+      "$id" "$(_provenance)" "$(cat "$cf")" > "$dest"
   fi
   rm -f "$cf"
   _kindex
@@ -538,7 +546,7 @@ k_ungraduate() {
   _block_remove "$target" "$id"
   if [ -f "$g" ]; then
     mkdir -p "$DATA/knowledge/lessons/superseded"
-    mv "$g" "$DATA/knowledge/lessons/superseded/$id.md"
+    mv "$g" "$(_uniq_dest "$DATA/knowledge/lessons/superseded/$id.md")"
   fi
   _kindex
   _unlock
@@ -553,7 +561,7 @@ k_supersede() {
     local f="$DATA/knowledge/$kind/$id.md"
     if [ -f "$f" ]; then
       mkdir -p "$DATA/knowledge/$kind/superseded"
-      mv "$f" "$DATA/knowledge/$kind/superseded/$id.md"
+      mv "$f" "$(_uniq_dest "$DATA/knowledge/$kind/superseded/$id.md")"
       rm -f "$DATA/knowledge/facts/$id.conflict"
       moved=1
     fi
@@ -577,7 +585,7 @@ k_prune() {
   if [ -z "$stale" ]; then echo "(nothing stale)"; return 0; fi
   if [ "$apply" = 1 ]; then
     for id in $stale; do k_supersede "$id" >/dev/null; done
-    echo "pruned: $stale"
+    echo "pruned: ${stale% }"
   else
     echo "Stale facts (past freshness window) — run 'relay knowledge prune --yes' to retire:"
     for id in $stale; do echo "  - $id"; done

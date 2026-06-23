@@ -31,5 +31,5 @@ Beyond per-session handoffs, Relay accumulates durable, local-only knowledge:
 - Loaded automatically at session start, ranked and budget-capped — truncation
   is never silent.
 
-Inspect or curate it: `relay.sh knowledge list | why <id> | prune | export`.
+Inspect or curate it: `relay.sh knowledge list`, `why <id>`, `prune`, `export`.
 All data lives in `.session-log/knowledge/` (gitignored).
