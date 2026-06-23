@@ -299,6 +299,58 @@ k_resolve() {
   echo "resolved: $id (kept $keep)"
 }
 
+_instruction_file() {
+  if [ -n "${RELAY_INSTRUCTION_FILE:-}" ]; then printf '%s' "$RELAY_INSTRUCTION_FILE"; return; fi
+  if   [ -f "$PWD/CLAUDE.md" ]; then printf '%s' "$PWD/CLAUDE.md"
+  elif [ -f "$PWD/AGENTS.md" ]; then printf '%s' "$PWD/AGENTS.md"
+  else printf '%s' "$PWD/CLAUDE.md"; fi
+}
+
+_block_upsert() { # file id body  (idempotent; replaces any existing id-block)
+  local file="$1" id="$2" body="$3" tmp bodyf
+  touch "$file"
+  grep -qF "<!-- relay:learned -->" "$file" || \
+    printf '\n<!-- relay:learned -->\n<!-- /relay:learned -->\n' >> "$file"
+  # Body MUST be passed via a file, not `awk -v`: BSD/POSIX awk rejects a newline
+  # inside a -v value, which would hard-fail graduation of any multi-line lesson.
+  bodyf="$(mktemp)"; printf '%s\n' "$body" > "$bodyf"
+  tmp="$(mktemp)"
+  awk -v id="$id" -v bodyf="$bodyf" '
+    BEGIN{ s="<!-- relay:learned:"id" -->"; e="<!-- /relay:learned:"id" -->";
+           rend="<!-- /relay:learned -->"; skip=0; done=0 }
+    {
+      if($0==s){ skip=1; next }
+      if(skip==1){ if($0==e) skip=0; next }
+      if($0==rend && done==0){
+        print s; while((getline ln < bodyf) > 0) print ln; close(bodyf); print e; done=1; print; next
+      }
+      print
+    }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+  rm -f "$bodyf"
+}
+
+k_graduate() {
+  local id; id="$(_slugify "${1:-}")"
+  local f="$DATA/knowledge/lessons/$id.md"
+  if [ ! -f "$f" ]; then
+    [ -f "$DATA/knowledge/lessons/graduated/$id.md" ] && { echo "already graduated: $id"; return 0; }
+    echo "relay: no active lesson: $id" >&2; return 1
+  fi
+  _lock || return 1
+  local target; target="$(_instruction_file)"
+  _block_upsert "$target" "$id" "$(_body "$f")"
+  _fm_set "$f" status graduated
+  _fm_set "$f" graduated_to "$target"
+  mkdir -p "$DATA/knowledge/lessons/graduated"
+  mv "$f" "$DATA/knowledge/lessons/graduated/$id.md"
+  _kindex
+  _unlock
+  # the one local→committed leak, named at the helper layer (spec §7.2), not just in adapter prose
+  echo "note: wrote to $target (a normally-committed file) — local-only learning may now travel; committing it is your choice." >&2
+  echo "graduated: $id → $target"
+}
+
 cmd_knowledge() {
   local kept=() ; while [ $# -gt 0 ]; do
     case "$1" in
@@ -312,6 +364,7 @@ cmd_knowledge() {
     add)        k_add "$@";;
     resolve)    k_resolve "$@";;
     list)       k_list "$@";;
+    graduate)   k_graduate "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
