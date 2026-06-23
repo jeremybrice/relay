@@ -325,7 +325,8 @@ _block_upsert() { # file id body  (idempotent; replaces any existing id-block)
         print s; while((getline ln < bodyf) > 0) print ln; close(bodyf); print e; done=1; print; next
       }
       print
-    }' "$file" > "$tmp"
+    }
+    END{ if(done==0){ print s; while((getline ln < bodyf) > 0) print ln; close(bodyf); print e; print rend } }' "$file" > "$tmp"
   mv "$tmp" "$file"
   rm -f "$bodyf"
 }

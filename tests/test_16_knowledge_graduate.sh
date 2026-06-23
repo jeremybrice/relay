@@ -28,10 +28,15 @@ assert_eq "$count" "1"
 assert_eq "$(grep -cF "<!-- relay:learned -->" "$INSTR")" "1"
 assert_contains "$(cat "$INSTR")" "<!-- relay:learned:lint-first -->"
 
-# case 4: user hand-edits prose around the markers → region still intact, both ids present
+# case 4: user hand-edits prose after the region, THEN a new lesson graduates →
+# region stays single, the new block lands, hand-written prose survives.
 printf '\n## My own notes\nhand-written.\n' >> "$INSTR"
+"$RELAY" knowledge add --lesson --id lint-after "Run lints after the edit." --dir "$DIR" >/dev/null
+"$RELAY" knowledge graduate lint-after --dir "$DIR" >/dev/null
 assert_contains "$(cat "$INSTR")" "<!-- relay:learned:types-first -->"
-assert_contains "$(cat "$INSTR")" "<!-- relay:learned:lint-first -->"
+assert_contains "$(cat "$INSTR")" "<!-- relay:learned:lint-after -->"
+assert_contains "$(cat "$INSTR")" "hand-written."
+assert_eq "$(grep -cF "<!-- relay:learned -->" "$INSTR")" "1"
 
 # case 5: a MULTI-LINE lesson body graduates intact (regression guard — newline must not break the awk block write)
 "$RELAY" knowledge add --lesson --id multi "First line of the lesson.
@@ -39,4 +44,15 @@ Second line with the why." --dir "$DIR" >/dev/null
 "$RELAY" knowledge graduate multi --dir "$DIR" >/dev/null
 assert_contains "$(cat "$INSTR")" "First line of the lesson."
 assert_contains "$(cat "$INSTR")" "Second line with the why."
-pass "knowledge graduate: region create, idempotent, shared region, hand-edit safe, multi-line body"
+
+# case 6: instruction file has a region-OPEN with NO matching CLOSE (hand-corruption).
+# graduate must STILL emit the id-block (no silent drop) and repair the region.
+INSTR2="$TMP/CLAUDE2.md"
+printf 'preamble\n<!-- relay:learned -->\n' > "$INSTR2"   # orphan open, no close, no rend anywhere
+"$RELAY" knowledge add --lesson --id orphan "Orphan-region lesson body." --dir "$DIR" >/dev/null
+RELAY_INSTRUCTION_FILE="$INSTR2" "$RELAY" knowledge graduate orphan --dir "$DIR" >/dev/null
+assert_contains "$(cat "$INSTR2")" "<!-- relay:learned:orphan -->"
+assert_contains "$(cat "$INSTR2")" "Orphan-region lesson body."
+assert_contains "$(cat "$INSTR2")" "<!-- /relay:learned -->"   # region-close emitted/repaired
+
+pass "knowledge graduate: region create, idempotent, shared region, hand-edit safe, multi-line body, orphan-region repair"
