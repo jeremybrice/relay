@@ -368,6 +368,7 @@ cmd_knowledge() {
     graduate)   k_graduate "$@";;
     ungraduate) k_ungraduate "$@";;
     supersede)  k_supersede "$@";;
+    prune)      k_prune "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
   esac
 }
@@ -491,6 +492,27 @@ k_supersede() {
   _kindex
   _unlock
   [ "$moved" = 1 ] && echo "superseded: $id" || { echo "relay: no active entry: $id" >&2; return 1; }
+}
+
+k_prune() {
+  local apply=0; [ "${1:-}" = "--yes" ] && apply=1
+  local kd="$DATA/knowledge" f id ttl last age limit stale=""
+  [ -d "$kd/facts" ] || { echo "(no facts)"; return 0; }
+  for f in "$kd"/facts/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"; ttl="$(_fm "$f" ttl)"; last="$(_fm "$f" last_confirmed)"
+    age="$(_days_since "$last")"
+    if [ "$ttl" != "none" ] && [ -n "$ttl" ]; then limit="$ttl"; else limit="$RELAY_FACT_STALE_DAYS"; fi
+    [ "$age" -gt "$limit" ] && stale="$stale$id "
+  done
+  if [ -z "$stale" ]; then echo "(nothing stale)"; return 0; fi
+  if [ "$apply" = 1 ]; then
+    for id in $stale; do k_supersede "$id" >/dev/null; done
+    echo "pruned: $stale"
+  else
+    echo "Stale facts (past freshness window) — run 'relay knowledge prune --yes' to retire:"
+    for id in $stale; do echo "  - $id"; done
+  fi
 }
 
 main "$@"
