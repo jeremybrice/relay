@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Relay — Portable Learning + Memory · Design Walkthrough</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --panel:#ffffff; --ink:#1e293b; --muted:#64748b; --faint:#94a3b8;
+    --line:#e2e8f0; --line2:#cbd5e1;
+    --core:#4f46e5;        /* indigo  — the deterministic helper */
+    --core-bg:#eef2ff;
+    --ephem:#d97706;       /* amber   — ephemeral handoffs */
+    --ephem-bg:#fffbeb;
+    --dur:#0d9488;         /* teal    — durable knowledge */
+    --dur-bg:#f0fdfa;
+    --grad:#9333ea;        /* purple  — graduation / instruction file */
+    --grad-bg:#faf5ff;
+    --ok:#16a34a;
+    --code:#0f172a;
+    --radius:14px;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+
+  /* ---------- layout ---------- */
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+  header.hero{background:linear-gradient(135deg,#1e1b4b 0%,#312e81 45%,#0f766e 120%);color:#fff;padding:64px 0 56px;position:relative;overflow:hidden}
+  header.hero::after{content:"";position:absolute;inset:0;background-image:radial-gradient(circle at 1px 1px,rgba(255,255,255,.10) 1px,transparent 0);background-size:26px 26px;opacity:.6}
+  .hero .wrap{position:relative;z-index:1}
+  .kicker{font-family:var(--mono);font-size:12.5px;letter-spacing:.18em;text-transform:uppercase;color:#a5b4fc;margin:0 0 14px}
+  .hero h1{font-size:42px;line-height:1.1;margin:0 0 16px;font-weight:800;letter-spacing:-.02em}
+  .hero p.lede{font-size:18px;max-width:760px;margin:0;color:#e0e7ff}
+  .baton{display:inline-flex;align-items:center;gap:10px;margin-top:26px;font-family:var(--mono);font-size:13px;color:#c7d2fe;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:8px 14px;border-radius:999px}
+  .baton b{color:#fff;font-weight:600}
+
+  nav.toc{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);}
+  nav.toc .wrap{display:flex;flex-wrap:wrap;gap:4px;padding:10px 28px}
+  nav.toc a{font-size:12.5px;color:var(--muted);text-decoration:none;padding:6px 11px;border-radius:8px;font-weight:500;white-space:nowrap}
+  nav.toc a:hover{background:var(--core-bg);color:var(--core)}
+
+  section{padding:46px 0;border-bottom:1px solid var(--line)}
+  .sec-num{font-family:var(--mono);font-size:13px;color:var(--core);font-weight:600}
+  h2{font-size:27px;margin:6px 0 6px;letter-spacing:-.01em;font-weight:750}
+  .sub{color:var(--muted);font-size:15.5px;margin:0 0 26px;max-width:780px}
+  h3{font-size:17px;margin:30px 0 12px;font-weight:700}
+  p{margin:0 0 14px}
+  .lead-in{color:var(--muted)}
+
+  /* ---------- legend ---------- */
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin:22px 0 6px}
+  .legend .chip{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+  .dot{width:12px;height:12px;border-radius:4px;display:inline-block}
+  .dot.core{background:var(--core)} .dot.ephem{background:var(--ephem)} .dot.dur{background:var(--dur)} .dot.grad{background:var(--grad)}
+
+  /* ---------- cards / pills ---------- */
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:1fr 1fr 1fr}
+  @media(max-width:780px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px}
+  .card.core{border-top:3px solid var(--core)}
+  .card.ephem{border-top:3px solid var(--ephem)}
+  .card.dur{border-top:3px solid var(--dur)}
+  .card.grad{border-top:3px solid var(--grad)}
+  .card h4{margin:0 0 8px;font-size:15.5px;display:flex;align-items:center;gap:9px}
+  .card p{font-size:14px;color:var(--muted);margin:0}
+  .tag{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;letter-spacing:.02em}
+  .tag.core{background:var(--core-bg);color:var(--core)}
+  .tag.ephem{background:var(--ephem-bg);color:var(--ephem)}
+  .tag.dur{background:var(--dur-bg);color:var(--dur)}
+  .tag.grad{background:var(--grad-bg);color:var(--grad)}
+  .tag.ok{background:#dcfce7;color:var(--ok)}
+
+  /* ---------- diagram primitives ---------- */
+  .diagram{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:26px;margin:8px 0 6px}
+  .node{border:1.5px solid var(--line2);border-radius:11px;padding:13px 16px;background:#fff;text-align:center}
+  .node .nt{font-weight:700;font-size:14px}
+  .node .nd{font-size:12px;color:var(--muted);margin-top:3px}
+  .node.core{border-color:var(--core);background:var(--core-bg)}
+  .node.ephem{border-color:var(--ephem);background:var(--ephem-bg)}
+  .node.dur{border-color:var(--dur);background:var(--dur-bg)}
+  .node.grad{border-color:var(--grad);background:var(--grad-bg)}
+  .row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .arrow-down{text-align:center;color:var(--faint);font-size:20px;line-height:1;margin:8px 0}
+
+  /* ---------- file tree ---------- */
+  .tree{background:var(--code);color:#e2e8f0;border-radius:var(--radius);padding:22px 24px;font-family:var(--mono);font-size:13px;line-height:1.85;overflow-x:auto;white-space:pre}
+  .tree .badge{display:inline-block;vertical-align:middle}
+  .tree .d{color:#7dd3fc}                /* dir */
+  .tree .ephem{color:#fbbf24}
+  .tree .dur{color:#5eead4}
+  .tree .grad{color:#d8b4fe}
+  .tree .c{color:#64748b}                /* comment */
+  .tree .new{color:#86efac;font-weight:600}
+  .tree .badge{font-size:10.5px;padding:1px 6px;border-radius:5px;margin-left:6px;font-weight:600}
+  .b-new{background:#14532d;color:#86efac}
+  .b-keep{background:#1e293b;color:#94a3b8}
+  .b-git{background:#7c2d12;color:#fdba74}
+  .b-com{background:#3730a3;color:#c7d2fe}
+
+  /* ---------- flow lanes ---------- */
+  .lanes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  @media(max-width:780px){.lanes{grid-template-columns:1fr}}
+  .lane{padding:0}
+  .lane + .lane{border-left:1px solid var(--line)}
+  @media(max-width:780px){.lane + .lane{border-left:none;border-top:1px solid var(--line)}}
+  .lane .lh{padding:11px 16px;font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .lane.ephem .lh{background:var(--ephem-bg);color:var(--ephem)}
+  .lane.fact .lh{background:var(--dur-bg);color:var(--dur)}
+  .lane.lesson .lh{background:var(--dur-bg);color:var(--dur)}
+  .lane .lb{padding:14px 16px;font-size:13px;color:var(--muted)}
+  .lane .lb code{font-family:var(--mono);font-size:11.5px;background:#f1f5f9;color:var(--ink);padding:1px 6px;border-radius:5px;display:inline-block;margin-top:6px}
+
+  /* ---------- ordered injection stack ---------- */
+  .stack{display:flex;flex-direction:column;gap:8px;max-width:640px}
+  .slot{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:12px 16px;background:#fff}
+  .slot .ix{font-family:var(--mono);font-size:12px;color:var(--faint);width:18px}
+  .slot .st{font-weight:650;font-size:14px}
+  .slot .sd{font-size:12.5px;color:var(--muted)}
+  .slot.ephem{border-left-color:var(--ephem)}
+  .slot.dur{border-left-color:var(--dur)}
+  .slot.core{border-left-color:var(--core)}
+  .slot .budget{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted);background:#f1f5f9;padding:3px 8px;border-radius:6px;white-space:nowrap}
+
+  /* ---------- lesson lifecycle ---------- */
+  .life{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .stage{flex:1;min-width:150px;background:#fff;border:1px solid var(--line);border-radius:11px;padding:14px;text-align:center;position:relative}
+  .stage .sn{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .stage .sttl{font-weight:700;font-size:14px;margin:4px 0}
+  .stage .sx{font-size:12px;color:var(--muted)}
+  .stage .counter{font-family:var(--mono);font-weight:700;font-size:13px;margin-top:8px;display:inline-block;padding:3px 9px;border-radius:7px;background:var(--dur-bg);color:var(--dur)}
+  .stage.grad{border-color:var(--grad);background:var(--grad-bg)}
+  .stage.grad .counter{background:#fff;color:var(--grad)}
+  .life-arrow{display:flex;align-items:center;color:var(--faint);font-size:22px;padding:0 6px}
+  @media(max-width:780px){.life-arrow{transform:rotate(90deg);padding:6px 0}}
+
+  /* ---------- tables ---------- */
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f8fafc;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+  tr:last-child td{border-bottom:none}
+  td code,p code,li code{font-family:var(--mono);font-size:12px;background:#f1f5f9;color:var(--code);padding:1px 6px;border-radius:5px}
+  td .y{color:var(--ok);font-weight:700}
+  td .n{color:var(--faint)}
+
+  /* ---------- code block ---------- */
+  pre.code{background:var(--code);color:#e2e8f0;border-radius:var(--radius);padding:18px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.7;overflow-x:auto;margin:6px 0}
+  pre.code .k{color:#c4b5fd} pre.code .s{color:#86efac} pre.code .c{color:#64748b} pre.code .f{color:#7dd3fc} pre.code .n{color:#fbbf24}
+
+  ul.clean{margin:0 0 14px;padding-left:20px}
+  ul.clean li{margin:0 0 7px;font-size:14.5px}
+  ul.clean li b{font-weight:650}
+
+  .callout{border:1px solid var(--line);border-left:4px solid var(--core);background:var(--core-bg);border-radius:10px;padding:14px 18px;margin:18px 0;font-size:14px}
+  .callout.dur{border-left-color:var(--dur);background:var(--dur-bg)}
+  .callout.grad{border-left-color:var(--grad);background:var(--grad-bg)}
+  .callout b{font-weight:700}
+
+  footer{padding:40px 0 60px;color:var(--muted);font-size:13px}
+  footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .pathline{font-family:var(--mono);font-size:12px;color:var(--faint)}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">Relay · learning layer · 2026-06-22 · hardened after Cognitive Forge review</p>
+    <h1>Portable Learning&nbsp;+&nbsp;Memory</h1>
+    <p class="lede">Relay grows from a session-handoff tool into a handoff <i>plus</i> lightweight self-learning tool — so agents get smarter in <b>every</b> repo it lives in, not just the Forge workspace. Active, deterministic, daemon-free, local-only.</p>
+    <span class="baton">🪃 &nbsp;<b>Driver:</b>&nbsp; dogfood reach &nbsp;·&nbsp; <b>Mechanism:</b>&nbsp; active &amp; light &nbsp;·&nbsp; <b>Dynamics:</b>&nbsp; reinforcement-lite</span>
+    <span class="baton" style="margin-left:10px;background:rgba(134,239,172,.12);border-color:rgba(134,239,172,.3)">✓ &nbsp;<b>Revised</b>&nbsp; — 6 critical issues from a 3-agent design review folded in (see §12)</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#big">1 · Big picture</a>
+    <a href="#arch">2 · Architecture</a>
+    <a href="#data">3 · Data structure</a>
+    <a href="#model">4 · Knowledge model</a>
+    <a href="#save">5 · Save flow</a>
+    <a href="#load">6 · Load flow</a>
+    <a href="#life">7 · Lesson lifecycle</a>
+    <a href="#hooks">8 · Hooks &amp; adapters</a>
+    <a href="#cmds">9 · Commands</a>
+    <a href="#impact">10 · Repo impact</a>
+    <a href="#scope">11 · Boundary</a>
+    <a href="#review">12 · Review hardening</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+<!-- ============ 1 BIG PICTURE ============ -->
+<section id="big">
+  <span class="sec-num">01</span>
+  <h2>The big picture — one tool, two tiers</h2>
+  <p class="sub">Relay already carries the daily handoff. We add a second, durable tier alongside it — knowledge that outlives the rolling 10-day window — without adding any cron, batch analyzer, or daemon. The deterministic helper still does every file operation; the agent still only authors prose.</p>
+
+  <div class="legend">
+    <span class="chip"><span class="dot core"></span> Core — deterministic helper (<code>relay.sh</code>)</span>
+    <span class="chip"><span class="dot ephem"></span> Ephemeral — daily handoffs</span>
+    <span class="chip"><span class="dot dur"></span> Durable — learned knowledge</span>
+    <span class="chip"><span class="dot grad"></span> Graduated — standing instructions</span>
+  </div>
+
+  <div class="grid g2" style="margin-top:18px">
+    <div class="card ephem">
+      <h4><span class="tag ephem">TIER 1</span> Ephemeral handoffs</h4>
+      <p>The existing system, unchanged. A 6-section handoff per session, a rolling 10-day history, an index line per day. <b>Pruned at 10 days.</b> Answers <i>"what happened recently?"</i></p>
+    </div>
+    <div class="card dur">
+      <h4><span class="tag dur">TIER 2 · NEW</span> Durable knowledge</h4>
+      <p>Facts + lessons that never prune. Captured at the same save moment, loaded every session. Lessons reinforce on recurrence and graduate into the repo's instruction file. Answers <i>"what is permanently true here, and what have I learned about working here?"</i></p>
+    </div>
+  </div>
+
+  <div class="callout"><b>What we deliberately did <i>not</i> port from Forge:</b> the SessionObserver cron, the <code>/analyze-learning</code> batch pipeline, confidence-score math, and time-decay. Those depend on a daemon a dogfood repo won't have. We keep the <i>idea</i> — capture → reinforce → graduate — and drop the machinery.</div>
+</section>
+
+<!-- ============ 2 ARCHITECTURE ============ -->
+<section id="arch">
+  <span class="sec-num">02</span>
+  <h2>Architecture — installer · adapters · core · data</h2>
+  <p class="sub">The same four-part shape Relay ships today. Only the Core's helper gains <code>knowledge</code> subcommands, and the two adapters gain one capture instruction each. The boundary invariant holds: an adapter can be swapped without touching the Core, and the data is plain markdown readable with no adapter at all.</p>
+
+  <div class="diagram">
+    <div class="row">
+      <div class="node core" style="min-width:420px"><div class="nt">install.sh &nbsp;·&nbsp; single self-contained installer</div><div class="nd">detect harness(es) · lay down Core · wire adapter(s) · gitignore data · plant the <code>&lt;!-- relay:learned --&gt;</code> anchor</div></div>
+    </div>
+    <div class="arrow-down">▼</div>
+    <div class="row">
+      <div class="node" style="min-width:230px"><div class="nt">Adapter · Claude Code</div><div class="nd">SessionStart hook → stdout<br>/session-save · /relay-learn<br>CLAUDE.md L2 prompt</div></div>
+      <div class="node" style="min-width:230px"><div class="nt">Adapter · Codex</div><div class="nd">SessionStart hook → systemMessage<br>$session-save · $relay-learn<br>AGENTS.md L2 prompt</div></div>
+    </div>
+    <div class="arrow-down">▼ &nbsp; both call the same helper &nbsp; ▼</div>
+    <div class="row">
+      <div class="node core" style="min-width:560px">
+        <div class="nt">Core — <span style="font-family:var(--mono)">relay.sh</span> &nbsp;(deterministic, zero-dependency, bash 3.2+)</div>
+        <div class="nd" style="margin-top:8px">
+          <code>load</code> · <code>save</code> · <code>knowledge add</code> · <code>knowledge graduate</code> · <code>knowledge supersede</code> · <code>knowledge list</code><br>
+          everything under a portable <code>mkdir</code> lock — append, bump, dedup, merge, prune
+        </div>
+      </div>
+    </div>
+    <div class="arrow-down">▼ &nbsp; owns &nbsp; ▼</div>
+    <div class="row">
+      <div class="node ephem" style="min-width:270px"><div class="nt">.session-log/ &nbsp;— ephemeral data</div><div class="nd">latest.md · index.md · history/ &nbsp;(pruned at 10)</div></div>
+      <div class="node dur" style="min-width:270px"><div class="nt">.session-log/knowledge/ &nbsp;— durable data</div><div class="nd">facts.md · lessons.md &nbsp;(never pruned)</div></div>
+    </div>
+    <div class="arrow-down">▼ &nbsp; lessons graduate into &nbsp; ▼</div>
+    <div class="row">
+      <div class="node grad" style="min-width:420px"><div class="nt">CLAUDE.md / AGENTS.md &nbsp;— <code>&lt;!-- relay:learned --&gt;</code> block</div><div class="nd">standing instructions, loaded natively by the harness</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3 DATA STRUCTURE ============ -->
+<section id="data">
+  <span class="sec-num">03</span>
+  <h2>Data structure — files to folders</h2>
+  <p class="sub">Everything new lives under the existing <code>.session-log/</code> directory, so the gitignore footprint stays a single line. Green = new in this design. The tool (<code>.relay/</code>) is committed and travels via git; the data (<code>.session-log/</code>) is local-only and gitignored.</p>
+
+  <div class="tree">
+<span class="d">repo-root/</span>
+├─ <span class="d">.relay/</span><span class="badge b-com">committed · the tool travels</span>
+│   ├─ relay.sh              <span class="c"># core helper · gains `knowledge` subcommands</span> <span class="badge b-new">+ subcmds</span>
+│   └─ <span class="d">adapters/</span>             <span class="c"># templates the installer wires from</span>
+│
+├─ <span class="d">.session-log/</span><span class="badge b-git">git-ignored · local-only</span>
+│   │
+│   │  <span class="c">── TIER 1 · ephemeral handoffs (unchanged) ──────────</span>
+│   ├─ <span class="ephem">latest.md</span>              <span class="c"># newest single-session handoff</span> <span class="badge b-keep">keep</span>
+│   ├─ <span class="ephem">index.md</span>               <span class="c"># one line per day, ≤10 days</span> <span class="badge b-keep">keep</span>
+│   ├─ <span class="ephem">history/</span>
+│   │     ├─ 2026-06-22.md     <span class="c"># one file per day · same-day appended</span>
+│   │     └─ …                 <span class="c"># last 10 dated files · older pruned</span>
+│   │
+│   │  <span class="c">── TIER 2 · durable knowledge (NEW · never pruned) ──</span>
+│   └─ <span class="dur new">knowledge/</span>             <span class="badge b-new">NEW</span>
+│         ├─ <span class="dur">index.md</span>           <span class="c"># DERIVED CACHE — rebuilt from files every op</span> <span class="badge b-new">NEW</span>
+│         ├─ <span class="dur">facts/</span>             <span class="c"># one file per fact (id = filename)</span> <span class="badge b-new">NEW</span>
+│         │     ├─ deploy-release-script.md
+│         │     └─ <span class="grad">superseded/</span>      <span class="c"># tombstones — retired / lost-conflict facts</span>
+│         └─ <span class="dur">lessons/</span>           <span class="c"># one file per active lesson</span> <span class="badge b-new">NEW</span>
+│               ├─ schema-types-first.md
+│               ├─ <span class="grad">graduated/</span>      <span class="c"># moved here on graduation (+ back-pointer)</span>
+│               └─ <span class="grad">superseded/</span>     <span class="c"># tombstones — retired lessons</span>
+│
+├─ .gitignore                <span class="c"># one entry already covers .session-log/</span>
+└─ <span class="grad">CLAUDE.md</span> / <span class="grad">AGENTS.md</span>      <span class="c"># gains a marked block for graduated lessons</span> <span class="badge b-new">+ block</span>
+        <span class="grad">&lt;!-- relay:learned --&gt; … &lt;!-- /relay:learned --&gt;</span>
+  </div>
+
+  <p class="lead-in" style="font-size:14px"><code>index.md</code> is a <b>derived cache</b> — <code>relay.sh</code> regenerates it from the entry files on every locked op (never hand-edited), so it can't drift from the files. It carries every field the load path ranks on, so load reads only the index. Each entry is its own small file, keyed by <code>id</code> — the atomic single-file rewrite is what makes the counter-bump safe.</p>
+  <div class="grid g2">
+    <div class="card dur">
+      <h4><span class="tag dur">facts/&lt;id&gt;.md</span> a durable truth</h4>
+      <pre class="code"><span class="c">---</span>
+<span class="k">id:</span> <span class="f">deploy-release-script</span>
+<span class="k">kind:</span> fact
+<span class="k">confirmed:</span> <span class="n">3</span>          <span class="c"># reinforcement proxy</span>
+<span class="k">last_confirmed:</span> 2026-06-22
+<span class="k">ttl:</span> none             <span class="c"># optional freshness window</span>
+<span class="k">source:</span> <span class="s">history/2026-06-22.md#session-2</span>
+<span class="k">status:</span> active
+<span class="c">---</span>
+Deploys ship via scripts/release.sh —
+never `npm publish` directly.</pre>
+      <p style="margin-top:10px"><b>Never graduates</b> — a fact isn't an instruction. <code>confirmed</code> + <code>ttl</code> + helper-stamped <code>source</code> give it dedup, freshness, and an audit trail with no math.</p>
+    </div>
+    <div class="card dur">
+      <h4><span class="tag dur">lessons/&lt;id&gt;.md</span> a behavioral pattern</h4>
+      <pre class="code"><span class="c">---</span>
+<span class="k">id:</span> <span class="f">schema-types-first</span>
+<span class="k">kind:</span> lesson
+<span class="k">seen:</span> <span class="n">3</span>   <span class="k">sessions:</span> <span class="n">3</span>     <span class="c"># DISTINCT dates</span>
+<span class="k">last_seen:</span> 2026-06-22
+<span class="k">source:</span> <span class="s">history/2026-06-22.md#session-2</span>
+<span class="k">status:</span> active   <span class="k">graduated_to:</span> null
+<span class="c">---</span>
+When editing the DB schema, regenerate
+types before touching call-sites…</pre>
+      <p style="margin-top:10px"><b>Graduates</b> on <code>sessions ≥ 3</code> (distinct dates, not raw <code>seen</code>). <code>graduated_to</code> back-pointer lets <code>list</code> catch drift if its rule is later deleted.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4 KNOWLEDGE MODEL ============ -->
+<section id="model">
+  <span class="sec-num">04</span>
+  <h2>Knowledge model — two entry kinds</h2>
+  <p class="sub">A deliberate, lightened mirror of Forge's memory/instinct split. The difference between the two is not cosmetic — facts are <i>looked up</i>, lessons are <i>acted on</i> and can harden into rules.</p>
+  <table>
+    <thead><tr><th style="width:18%">Aspect</th><th style="width:41%">Fact</th><th style="width:41%">Lesson</th></tr></thead>
+    <tbody>
+      <tr><td><b>Question it answers</b></td><td>"What is permanently true about this repo?"</td><td>"What have I learned about <i>how to work</i> here?"</td></tr>
+      <tr><td><b>Nature</b></td><td>Reference context</td><td>Behavioral pattern (<code>when X → prefer Y, because Z</code>)</td></tr>
+      <tr><td><b>Carries a counter?</b></td><td><span class="y">Yes</span> — <code>confirmed: N</code> (reinforcement proxy)</td><td><span class="y">Yes</span> — <code>seen: N</code> + <code>sessions: M</code> (distinct dates)</td></tr>
+      <tr><td><b>Dedup on write</b></td><td><code>--near</code> shows candidate ids; divergent body → <b>conflict</b>, never silent overwrite</td><td>id match → reinforce; new id → new lesson</td></tr>
+      <tr><td><b>Freshness</b></td><td>Optional <code>ttl</code> — load flags only expired (lazy revalidation, no cron)</td><td>n/a — drains by graduating</td></tr>
+      <tr><td><b>Graduates to a rule?</b></td><td><span class="n">Never</span></td><td><span class="y">Yes</span> — at <code>sessions ≥ 3</code>, gated</td></tr>
+      <tr><td><b>Retired by</b></td><td><code>resolve</code> (conflict) · <code>supersede</code> · gated <code>prune</code></td><td><code>supersede</code> · <code>ungraduate</code> (retire a stale rule)</td></tr>
+      <tr><td><b>Loaded at start?</b></td><td>Yes, ranked by <code>confirmed × recency</code>; truncation is <b>never silent</b></td><td>Active ones yes; graduated ones load via the instruction file instead</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 5 SAVE FLOW ============ -->
+<section id="save">
+  <span class="sec-num">05</span>
+  <h2>Save flow — one reflection, three destinations</h2>
+  <p class="sub">Capture piggybacks entirely on the save you already run. No new habit. At wrap-up the agent reflects once and routes that reflection into three buckets — the helper does the deterministic writing.</p>
+
+  <div class="diagram">
+    <div class="row"><div class="node core" style="min-width:480px"><div class="nt">Wrap-up cue → <code>/session-save</code> (or <code>$session-save</code>)</div><div class="nd">agent reflects on the session — authoring happens <b>before</b> the lock</div></div></div>
+    <div class="arrow-down">▼ &nbsp; sorts into &nbsp; ▼</div>
+    <div class="lanes">
+      <div class="lane ephem">
+        <div class="lh">🗒 What happened today</div>
+        <div class="lb">The 6-section handoff — Summary / Changed / Decisions / Next / Watch out / Open questions. Exactly as today.
+        <br><code>relay save</code></div>
+      </div>
+      <div class="lane fact">
+        <div class="lh">📌 What's now permanently true</div>
+        <div class="lb">A durable fact. Agent runs <code>--near</code> first to reuse an existing id, then writes with an explicit <code>--id</code>. A matching id reinforces; a divergent body raises a <b>conflict</b>, never a silent overwrite.
+        <br><code>relay knowledge add --fact --near "…"</code>
+        <br><code>relay knowledge add --fact --id deploy-release-script "…"</code></div>
+      </div>
+      <div class="lane lesson">
+        <div class="lh">🎓 What I learned about working here</div>
+        <div class="lb">A behavioral lesson. Agent supplies a stable <code>id</code>; helper creates or bumps <code>seen</code> + <code>sessions</code>.
+        <br><code>relay knowledge add --lesson --id schema-types-first "…"</code></div>
+      </div>
+    </div>
+    <div class="arrow-down">▼ &nbsp; helper holds the lock, then &nbsp; ▼</div>
+    <div class="row">
+      <div class="node ephem"><div class="nt">history/ + latest + index</div><div class="nd">append · overwrite · dedup · prune-to-10</div></div>
+      <div class="node dur"><div class="nt">facts/&lt;id&gt;.md</div><div class="nd">create · confirm · or raise conflict</div></div>
+      <div class="node dur"><div class="nt">lessons/&lt;id&gt;.md</div><div class="nd">create at seen:1 · or bump seen + sessions</div></div>
+      <div class="node dur"><div class="nt">knowledge/index.md</div><div class="nd">rebuilt from files (derived cache)</div></div>
+    </div>
+  </div>
+  <div class="callout dur"><b>Division of labor, unchanged from Relay's DNA.</b> The agent owns the judgment — is this durable? does it match an existing lesson? what's the <code>id</code>? The helper owns the deterministic mechanics — append, bump, dedup, merge, lock. A mid-session "remember this" runs the same <code>relay knowledge add</code> via the standalone <code>/relay-learn</code>.</div>
+</section>
+
+<!-- ============ 6 LOAD FLOW ============ -->
+<section id="load">
+  <span class="sec-num">06</span>
+  <h2>Load flow — what the agent sees at session start</h2>
+  <p class="sub">All injected by <code>cmd_load</code> in one motion, so the change flows to both Claude Code and Codex identically (Codex just JSON-escapes the same string into <code>systemMessage</code>). Knowledge loads under its <b>own</b> word budget, separate from the handoff cap — a busy knowledge store can never squeeze the handoff headline.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="slot core"><span class="ix">1</span><div><div class="st">Recency line</div><div class="sd">"Last saved 2026-06-22 (today)" · ⚠ flag if &gt; 3 days stale</div></div></div>
+      <div class="slot ephem"><span class="ix">2</span><div><div class="st">latest.md — the headline handoff</div><div class="sd">most recent session, in full</div></div><span class="budget">RELAY_WORD_CAP ≈ 800</span></div>
+      <div class="slot ephem"><span class="ix">3</span><div><div class="st">Today's earlier sessions</div><div class="sd">only on multi-session days · per the full-day-load spec</div></div><span class="budget">shared cap</span></div>
+      <div class="slot dur"><span class="ix">4</span><div><div class="st">Facts &nbsp;<span class="tag dur">NEW</span></div><div class="sd">ranked by <code>confirmed × recency</code> · over cap → explicit <b>"14 of 31 shown"</b> line, never silent · TTL-expired + conflicts flagged</div></div><span class="budget">RELAY_FACTS_CAP</span></div>
+      <div class="slot dur"><span class="ix">5</span><div><div class="st">Active lessons &nbsp;<span class="tag dur">NEW</span></div><div class="sd">non-graduated only, ranked by <code>seen</code> desc · over cap → explicit count, never silent</div></div><span class="budget">RELAY_LESSONS_CAP</span></div>
+      <div class="slot ephem"><span class="ix">6</span><div><div class="st">index.md — the ≤10-day map</div><div class="sd">verbatim breadcrumbs</div></div></div>
+      <div class="slot core"><span class="ix">7</span><div><div class="st">On-demand pointer</div><div class="sd">"open history/&lt;date&gt;.md or knowledge/ for full detail"</div></div></div>
+    </div>
+  </div>
+  <div class="callout grad"><b>Graduation relocates, it doesn't shrink total context.</b> A graduated lesson moves <i>out</i> of slot 5 and <i>into</i> the instruction file the harness loads natively — keeping <i>Relay's</i> injected block small and avoiding double-injection. But that file is uncapped, so load also nudges if the graduated region grows large, and <code>ungraduate</code> drains it. (Corrected from the pre-review "budget control" framing.)</div>
+</section>
+
+<!-- ============ 7 LESSON LIFECYCLE ============ -->
+<section id="life">
+  <span class="sec-num">07</span>
+  <h2>Lesson lifecycle — the whole learning engine</h2>
+  <p class="sub">No confidence math, no cron. Just a counter, a threshold, and a gated append. This is the entire "self-learning" mechanism.</p>
+
+  <div class="diagram">
+    <div class="life">
+      <div class="stage"><div class="sn">capture</div><div class="sttl">Noticed</div><div class="sx">agent writes the lesson at save</div><span class="counter">sessions: 1</span></div>
+      <div class="life-arrow">→</div>
+      <div class="stage"><div class="sn">recurrence</div><div class="sttl">Reinforced</div><div class="sx">re-asserted on a <b>new day</b>; same-day repeats don't count</div><span class="counter">sessions: 2</span></div>
+      <div class="life-arrow">→</div>
+      <div class="stage"><div class="sn">threshold</div><div class="sttl">Ready</div><div class="sx"><code>sessions ≥ RELAY_GRADUATE_AT</code> — distinct dates, not raw seen</div><span class="counter">sessions: 3 ✓</span></div>
+      <div class="life-arrow">→</div>
+      <div class="stage grad"><div class="sn">gated append</div><div class="sttl">Graduated</div><div class="sx">propose → you okay → idempotent id-keyed block write → status flip → index rebuild</div><span class="counter">status: graduated</span></div>
+    </div>
+  </div>
+  <p class="lead-in" style="font-size:13.5px;margin-top:12px"><b>Retirement path (new):</b> a graduated rule that goes stale is drained by <code>relay knowledge ungraduate &lt;id&gt;</code> — idempotently removes its lines from the marked block and tombstones it. No graduated text is ever orphaned. The <code>sessions</code> gate (distinct dates) replaces a bare counter so a coincidence seen three times in one afternoon can't graduate like a real pattern.</p>
+
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card grad">
+      <h4><span class="tag grad">gated, not automatic</span> Why you approve graduation</h4>
+      <p>Writing into <code>CLAUDE.md</code>/<code>AGENTS.md</code> is a persistent, behavior-changing edit, so per your decision-threshold rules the agent <b>proposes</b> it — "this lesson's been confirmed 3×, graduate it?" — and you okay it. An <code>RELAY_AUTO_GRADUATE</code> toggle exists for hands-free use, off by default.</p>
+    </div>
+    <div class="card">
+      <h4><span class="tag ok">retire</span> No decay — supersede by judgment</h4>
+      <p>Forge's time-decay needs a scheduler we don't have. Instead a lesson that turns out wrong is retired deliberately: <code>relay knowledge supersede &lt;id&gt;</code> flips it to <code>superseded</code> so it stops loading. Cutting decay is part of "lighter."</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8 HOOKS & ADAPTERS ============ -->
+<section id="hooks">
+  <span class="sec-num">08</span>
+  <h2>Hooks &amp; adapters — symmetric across harnesses</h2>
+  <p class="sub">Both adapters call the same <code>relay.sh</code>; only the trigger wiring and the context-injection field differ. The new design adds exactly one capture instruction and one standalone command per adapter — the load hook is untouched in wiring, it just emits more.</p>
+  <table>
+    <thead><tr><th style="width:24%">Operation</th><th style="width:38%">Claude Code</th><th style="width:38%">Codex</th></tr></thead>
+    <tbody>
+      <tr><td><b>Load</b> <span class="tag ephem">hook</span></td><td><code>SessionStart</code> hook → <code>relay load</code> → <b>stdout</b> injected into context</td><td><code>SessionStart</code> hook → <code>relay load --format codex</code> → <b>systemMessage</b> JSON</td></tr>
+      <tr><td><b>Save</b> L1 <span class="tag core">explicit</span></td><td><code>/session-save</code> command → handoff <b>+ knowledge capture</b></td><td><code>$session-save</code> skill → handoff <b>+ knowledge capture</b></td></tr>
+      <tr><td><b>Learn</b> <span class="tag dur">new</span></td><td><code>/relay-learn</code> → <code>relay knowledge add</code> (mid-session)</td><td><code>$relay-learn</code> → <code>relay knowledge add</code> (mid-session)</td></tr>
+      <tr><td><b>Save</b> L2 <span class="tag core">prompted</span></td><td>CLAUDE.md prompt: at wrap-up, also capture facts/lessons &amp; surface graduation-ready ones</td><td>AGENTS.md prompt: same instruction</td></tr>
+      <tr><td><b>Graduation target</b> <span class="tag grad">new</span></td><td><code>&lt;!-- relay:learned --&gt;</code> block in <b>CLAUDE.md</b></td><td>same block in <b>AGENTS.md</b></td></tr>
+      <tr><td><b>Hook config</b></td><td><code>.claude/settings.json</code></td><td><code>.codex/config.toml</code> <code>[hooks]</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout"><b>Why the fix lives in the shared core, not the adapters.</b> A single append inside <code>cmd_load</code> flows to both harnesses for free and keeps them from drifting — the same boundary discipline that produced the full-day-load decision. Adapters stay thin: trigger wiring + injection field only.</div>
+</section>
+
+<!-- ============ 9 COMMANDS ============ -->
+<section id="cmds">
+  <span class="sec-num">09</span>
+  <h2>Command surface — all deterministic</h2>
+  <p class="sub">Every write is a helper subcommand the agent calls. The agent never edits the knowledge files directly — that's what makes graduation idempotent and the counters trustworthy.</p>
+  <pre class="code"><span class="c"># ── capture (piggybacks on save, or standalone via /relay-learn) ──</span>
+relay <span class="k">knowledge add</span> <span class="n">--fact</span>   <span class="n">--near</span> <span class="s">"…"</span>          <span class="c"># show top-3 existing ids, write nothing</span>
+relay <span class="k">knowledge add</span> <span class="n">--fact</span>   <span class="n">--id</span> <span class="f">deploy-release-script</span> <span class="s">"…"</span>
+        <span class="c"># new → confirmed:1 · matching → confirm · divergent body → CONFLICT (not overwrite)</span>
+relay <span class="k">knowledge add</span> <span class="n">--lesson</span> <span class="n">--id</span> <span class="f">schema-types-first</span> <span class="s">"…"</span>
+        <span class="c"># new → seen:1 · re-asserted → bump seen + (sessions on a new day)</span>
+
+<span class="c"># ── resolve / retire ──</span>
+relay <span class="k">knowledge resolve</span>    <span class="f">deploy-release-script</span>   <span class="c"># pick a side of a fact conflict</span>
+relay <span class="k">knowledge supersede</span>  <span class="f">&lt;id&gt;</span>                    <span class="c"># tombstone an active entry</span>
+relay <span class="k">knowledge prune</span>                              <span class="c"># propose expired/stale facts (gated)</span>
+
+<span class="c"># ── graduate a reinforced lesson into the instruction file (gated) + drain it ──</span>
+relay <span class="k">knowledge graduate</span>   <span class="f">schema-types-first</span>    <span class="c"># idempotent id-keyed block write</span>
+relay <span class="k">knowledge ungraduate</span> <span class="f">schema-types-first</span>    <span class="c"># retire a stale graduated rule</span>
+
+<span class="c"># ── audit / inspect ──</span>
+relay <span class="k">knowledge why</span> <span class="f">&lt;id&gt;</span>     <span class="c"># cat the entry + the handoff it came from (provenance)</span>
+relay <span class="k">knowledge list</span>          <span class="c"># current state + conflict/drift flags</span>
+relay <span class="k">knowledge export</span>        <span class="c"># concat active entries → one shareable file (gated)</span>
+
+<span class="c"># ── load now emits Facts + active Lessons; truncation is NEVER silent ──</span>
+relay <span class="k">load</span> [<span class="n">--format</span> codex]</pre>
+</section>
+
+<!-- ============ 10 REPO IMPACT ============ -->
+<section id="impact">
+  <span class="sec-num">10</span>
+  <h2>Repo impact — what changes when you install</h2>
+  <p class="sub">Additive and reversible. Nothing existing is rewritten; the installer lays down two empty files, adds subcommands to the helper, and plants one marked block.</p>
+  <table>
+    <thead><tr><th style="width:38%">Touch point</th><th style="width:20%">Change</th><th style="width:42%">Git status</th></tr></thead>
+    <tbody>
+      <tr><td><code>.relay/relay.sh</code></td><td><span class="y">extended</span></td><td><span class="tag grad">committed</span> — new <code>knowledge</code> subcommands + load injection</td></tr>
+      <tr><td><code>.session-log/knowledge/facts.md</code></td><td><span class="y">new</span></td><td><span class="tag ephem">git-ignored</span> — local-only durable data</td></tr>
+      <tr><td><code>.session-log/knowledge/lessons.md</code></td><td><span class="y">new</span></td><td><span class="tag ephem">git-ignored</span> — local-only durable data</td></tr>
+      <tr><td><code>CLAUDE.md</code> / <code>AGENTS.md</code></td><td><span class="y">+ block</span></td><td>marked <code>&lt;!-- relay:learned --&gt;</code> region — <b>the one local→committed leak</b>; graduation names it &amp; gates it; <b>you</b> choose whether to commit</td></tr>
+      <tr><td><code>.claude/settings.json</code> · <code>.codex/config.toml</code></td><td><span class="n">unchanged</span></td><td>load hook already wired — no new wiring needed</td></tr>
+      <tr><td>adapter skills/commands</td><td><span class="y">+ /relay-learn</span></td><td><span class="tag grad">committed</span> — one new command + one capture instruction each</td></tr>
+      <tr><td><code>.gitignore</code></td><td><span class="n">unchanged</span></td><td>existing <code>.session-log/</code> entry already covers <code>knowledge/</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout dur"><b>Local-only, for now.</b> The whole knowledge tier is gitignored like the handoffs. The single config value that draws the local-vs-shared line is reserved, so flipping a future team repo to <i>shared learning</i> is a switch, not a redesign. The one thing that travels today is a <i>graduated</i> lesson — because the instruction file is yours to commit.</div>
+</section>
+
+<!-- ============ 11 BOUNDARY ============ -->
+<section id="scope">
+  <span class="sec-num">11</span>
+  <h2>Boundary &amp; non-goals</h2>
+  <p class="sub">What keeps this "lighter and active" instead of a second Forge.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h4>✓ In scope — v1 of learning</h4>
+      <ul class="clean">
+        <li><b>Durable facts</b> + <b>behavioral lessons</b>, captured at save</li>
+        <li><b>Reinforcement-lite</b> — a <code>seen</code> counter, no confidence scores</li>
+        <li><b>Gated graduation</b> into the instruction file at threshold</li>
+        <li><b>Separate-budget load</b> so the handoff is never squeezed</li>
+        <li><b>Standalone capture</b> via <code>/relay-learn</code></li>
+        <li>Extended zero-dependency test suite</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>✗ Out of scope — deliberately cut</h4>
+      <ul class="clean">
+        <li>No cron, background capture, or batch analyzer</li>
+        <li>No time-decay (no scheduler to run it)</li>
+        <li>No confidence-score math — just the counter + threshold</li>
+        <li>No committed / shared store yet (config switch reserved)</li>
+        <li>No cross-repo knowledge aggregation</li>
+        <li>No auto-graduation by default (toggle exists, off)</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout"><b>The boundary invariant.</b> Knowledge is just markdown, fully readable with no adapter; <code>relay.sh</code> owns every write, merge, and counter; the agent owns judgment and prose; adapters stay thin. Relay grows a new capability without losing the deterministic DNA that made it portable.</div>
+</section>
+
+<!-- ============ 12 REVIEW HARDENING ============ -->
+<section id="review">
+  <span class="sec-num">12</span>
+  <h2>Hardened after a 3-agent design review</h2>
+  <p class="sub">A Cognitive Forge review (challenger / explorer / decomposer) found the v1 draft's determinism was broken at one seam — the <code>id</code>/slug contract — with <code>index.md</code> consistency as the second concentrated risk and three holes in graduation. The core thread: the file write was deterministic, but the create-vs-merge-vs-overwrite <i>outcome</i> rode on an unverified agent slug. All six critical issues are now folded in.</p>
+  <table>
+    <thead><tr><th style="width:5%">#</th><th style="width:43%">Issue the review surfaced</th><th style="width:52%">Fix folded into this design</th></tr></thead>
+    <tbody>
+      <tr><td><b>R1</b></td><td>Fact <code>id</code> contract undefined &amp; self-contradictory (<code>--fact</code> had no id, but merge keyed on id)</td><td>Facts take an explicit <code>--id</code>; deterministic slug-normalization rules pinned</td></tr>
+      <tr><td><b>R2</b></td><td>Confirm-and-merge <b>silently overwrote</b> on an id collision — data loss on the happy path</td><td><code>--near</code> dedup before write; id match + divergent body → <b>conflict block</b> + <code>resolve</code>, never overwrite</td></tr>
+      <tr><td><b>R3</b></td><td>Facts cap reintroduced the <b>silent partial continuity</b> the full-day-load spec was written to kill</td><td>Truncation is <b>never silent</b> — load emits "N of M shown … may include load-bearing truths"</td></tr>
+      <tr><td><b>R4</b></td><td><code>index.md</code> was a single point of failure that capped load <b>hides</b> when it drifts</td><td><code>index.md</code> is a <b>derived cache</b>, full-rebuilt from entry files every locked op — drift made structurally impossible</td></tr>
+      <tr><td><b>R5</b></td><td>Graduation: uncapped surface, <b>no retirement path</b>, leaks local learning into a committed file</td><td><code>ungraduate</code> drains it; "budget control" claim corrected; the local→committed leak is named &amp; gated</td></tr>
+      <tr><td><b>R6</b></td><td>Bare <code>seen ≥ 3</code> couldn't tell a coincidence from a pattern</td><td>Gate is now <code>sessions ≥ 3</code> — distinct dates, fed by helper-stamped provenance</td></tr>
+    </tbody>
+  </table>
+  <div class="grid g3" style="margin-top:16px">
+    <div class="card dur"><h4><span class="tag dur">enh</span> Provenance</h4><p>Helper stamps <code>source: history/&lt;date&gt;.md#session-N</code> at zero agent cost — unlocks contradiction-handling, the <code>sessions</code> gate, and <code>relay knowledge why</code>.</p></div>
+    <div class="card dur"><h4><span class="tag dur">enh</span> <code>confirmed</code> + TTL</h4><p>A fact reinforcement counter (free confidence proxy) and an optional freshness window revalidated lazily at load — staleness needs no scheduler.</p></div>
+    <div class="card grad"><h4><span class="tag grad">enh</span> Conflict markers</h4><p>Git's "never auto-resolve, always surface" discipline for contradictory facts: both sides kept, flagged at load, <code>resolve</code> picks one.</p></div>
+  </div>
+  <div class="callout dur" style="margin-top:18px"><b>Verdict the three agents shared:</b> the architecture is sound and buildable in deterministic bash 3.2 — the fragility was <i>concentrated</i> in two contracts (fact <code>id</code> + <code>index.md</code>), not pervasive. Both are now pinned. Full review: <span class="pathline">2026-06-22-relay-learning-design-review.md</span></div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Relay · Portable Learning + Memory — design walkthrough</span>
+    <span class="pathline">projects/relay/docs/relay-learning-design.html</span>
+  </div>
+</footer>
+
+</body>
+</html>
