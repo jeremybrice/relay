@@ -67,12 +67,50 @@ wire_codex() {
   grep -qF "relay-session-start.sh" "$cfg" 2>/dev/null || cat .relay/adapters/codex/hooks.relay.toml >> "$cfg"
 }
 
+wire_opencode() {
+  mkdir -p .opencode/commands
+  [ -d .relay/adapters/opencode/commands ] && cp .relay/adapters/opencode/commands/*.md .opencode/commands/ 2>/dev/null || true
+  append_block AGENTS.md .relay/adapters/opencode/AGENTS.relay.md
+  # opencode has no SessionStart-style "inject into context" hook; the native
+  # equivalent is the `instructions` array in opencode.json, loaded as system
+  # context at every session start. We point it at a snapshot file that
+  # /session-save and /relay-learn refresh after every write.
+  local cfg="" entry=".session-log/relay-instructions.md"
+  for f in opencode.jsonc opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
+  [ -n "$cfg" ] || cfg="opencode.json"
+  touch "$cfg"
+  grep -qF "$entry" "$cfg" 2>/dev/null && return 0    # idempotent
+  if command -v jq >/dev/null 2>&1; then
+    jq --arg p "$entry" '.instructions = ((.instructions // []) + [$p])' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$cfg" "$entry" <<'PY'
+import json, re, sys
+p, entry = sys.argv[1], sys.argv[2]
+with open(p) as f: raw = f.read()
+# strip JSONC comments (json is strict); preserve everything else
+stripped = re.sub(r'//.*$', '', raw, flags=re.MULTILINE)
+stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
+d = json.loads(stripped) if stripped.strip() else {}
+instr = d.setdefault("instructions", [])
+if entry not in instr: instr.append(entry)
+with open(p, "w") as f: json.dump(d, f, indent=2)
+PY
+  else
+    echo "relay: cannot auto-merge $cfg — add this path to the 'instructions' array manually:" >&2
+    echo "  $entry" >&2
+  fi
+  # seed an empty snapshot so the instructions path doesn't 404 before the first save
+  mkdir -p .session-log
+  [ -f "$entry" ] || printf '# Relay handoff will appear here after the first /session-save\n' > "$entry"
+}
+
 main() {
   local did=0
-  [ -d .claude ] && { copy_tool; wire_cc; did=1; }
-  [ -d .codex ]  && { copy_tool; wire_codex; did=1; }
+  [ -d .claude ]   && { copy_tool; wire_cc; did=1; }
+  [ -d .codex ]    && { copy_tool; wire_codex; did=1; }
+  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && { copy_tool; wire_opencode; did=1; }
   if [ "$did" = 0 ]; then
-    echo "relay: no .claude/ or .codex/ detected — nothing to wire. Re-run inside a Claude Code or Codex repo." >&2
+    echo "relay: no .claude/, .codex/, or .opencode/ detected — nothing to wire. Re-run inside a Claude Code, Codex, or opencode repo." >&2
     exit 0
   fi
   gitignore_data
