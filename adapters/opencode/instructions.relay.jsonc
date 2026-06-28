@@ -1,0 +1,10 @@
+// adapters/opencode/instructions.relay.jsonc
+// Merge this entry into opencode.json's `instructions` array (idempotent):
+//   .session-log/relay-instructions.md is a snapshot of the last handoff +
+//   active knowledge + index, refreshed by /session-save and /relay-learn.
+//   opencode loads it as system context at every session start — the static
+//   equivalent of Claude Code's SessionStart hook / Codex's hookSpecificOutput.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".session-log/relay-instructions.md"]
+}

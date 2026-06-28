@@ -671,6 +671,14 @@ emit_adapters() {
   emit__adapters_codex_skills_relay_learn_SKILL_md > ".relay/adapters/codex/skills/relay-learn/SKILL.md"
   mkdir -p ".relay/adapters/codex/skills/session-save"
   emit__adapters_codex_skills_session_save_SKILL_md > ".relay/adapters/codex/skills/session-save/SKILL.md"
+  mkdir -p ".relay/adapters/opencode"
+  emit__adapters_opencode_AGENTS_relay_md > ".relay/adapters/opencode/AGENTS.relay.md"
+  mkdir -p ".relay/adapters/opencode/commands"
+  emit__adapters_opencode_commands_relay_learn_md > ".relay/adapters/opencode/commands/relay-learn.md"
+  mkdir -p ".relay/adapters/opencode/commands"
+  emit__adapters_opencode_commands_session_save_md > ".relay/adapters/opencode/commands/session-save.md"
+  mkdir -p ".relay/adapters/opencode"
+  emit__adapters_opencode_instructions_relay_jsonc > ".relay/adapters/opencode/instructions.relay.jsonc"
 }
 
 emit__adapters_claude_code_CLAUDE_relay_md() { cat <<'RELAY_EOF'
@@ -849,6 +857,118 @@ Persist a Relay handoff for the next agent.
 RELAY_EOF
 }
 
+emit__adapters_opencode_AGENTS_relay_md() { cat <<'RELAY_EOF'
+<!-- adapters/opencode/AGENTS.relay.md -->
+## Relay — session handoff (L2)
+At the START of a session, the last handoff + active knowledge load automatically
+via the `instructions` entry in `opencode.json` (from
+`.session-log/relay-instructions.md`). If that file is missing or empty, fall back
+to reading `.session-log/latest.md` and `.session-log/index.md` directly.
+When the user signals the session is wrapping up ("done for today", "let's
+continue tomorrow", or a task completes and we're winding down), run
+`/session-save` to persist a Relay handoff. If unsure the session is ending,
+offer it in one line.
+At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
+`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+
+RELAY_EOF
+}
+
+emit__adapters_opencode_commands_relay_learn_md() { cat <<'RELAY_EOF'
+<!-- adapters/opencode/commands/relay-learn.md -->
+---
+description: Record a durable fact or lesson about this repo into Relay knowledge
+---
+Capture a single durable piece of knowledge about THIS repo for future sessions.
+
+1. Decide the kind:
+   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
+   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
+2. For a fact, first check for an existing match so you reuse its id instead of
+   duplicating:
+
+   ```bash
+   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
+     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
+   ```
+3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
+   `--ttl <days>` to a fact that is only true for a while (e.g. the current sprint);
+   omit it for durable truths:
+
+   ```bash
+   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
+     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
+   # time-bound fact: ... knowledge add --fact --id current-sprint --ttl 14 '...' --dir ...
+   # or a lesson:
+   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
+     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
+   ```
+4. Refresh the snapshot opencode auto-loads next session so the new knowledge
+   is in context the moment the next session starts:
+
+   ```bash
+   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+     > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
+   ```
+5. If the tool reports a lesson is graduation-ready, offer (one line) to run
+   `knowledge graduate <slug>` — never graduate without the user's okay.
+
+RELAY_EOF
+}
+
+emit__adapters_opencode_commands_session_save_md() { cat <<'RELAY_EOF'
+<!-- adapters/opencode/commands/session-save.md -->
+---
+description: Save a Relay handoff so the next opencode session can pick up where you left off
+---
+Persist a Relay handoff for the next agent.
+
+1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
+   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
+   files/paths and dated facts. Compose a one-line digest.
+2. Persist it. The script owns all file writes, rotation, and locking:
+
+   ```bash
+   printf '%s\n' '<<the six sections as markdown>>' \
+     | "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" save \
+         --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+         --digest '<<one-line digest>>'
+   ```
+3. Reply: "Handoff saved for the next session."
+4. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
+   `instructions` field, so the new handoff is in context the moment the next
+   session starts:
+
+   ```bash
+   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+     > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
+   ```
+5. Then capture durable knowledge from this session (skip if none): for each
+   permanent repo truth run `knowledge add --fact --near` then `--fact --id <slug>`;
+   for each behavioral lesson run `knowledge add --lesson --id <slug>`. Use
+   `"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh"` and
+   `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"`. Re-run the step-4 load
+   after the knowledge writes so the snapshot stays current. If the tool says a
+   lesson is graduation-ready, offer graduation in one line.
+
+RELAY_EOF
+}
+
+emit__adapters_opencode_instructions_relay_jsonc() { cat <<'RELAY_EOF'
+// adapters/opencode/instructions.relay.jsonc
+// Merge this entry into opencode.json's `instructions` array (idempotent):
+//   .session-log/relay-instructions.md is a snapshot of the last handoff +
+//   active knowledge + index, refreshed by /session-save and /relay-learn.
+//   opencode loads it as system context at every session start — the static
+//   equivalent of Claude Code's SessionStart hook / Codex's hookSpecificOutput.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".session-log/relay-instructions.md"]
+}
+
+RELAY_EOF
+}
+
 #!/usr/bin/env bash
 # install.sh — lay Relay into the current repo. (Bundled release embeds sources; --from uses a source tree.)
 set -euo pipefail
@@ -918,12 +1038,50 @@ wire_codex() {
   grep -qF "relay-session-start.sh" "$cfg" 2>/dev/null || cat .relay/adapters/codex/hooks.relay.toml >> "$cfg"
 }
 
+wire_opencode() {
+  mkdir -p .opencode/commands
+  [ -d .relay/adapters/opencode/commands ] && cp .relay/adapters/opencode/commands/*.md .opencode/commands/ 2>/dev/null || true
+  append_block AGENTS.md .relay/adapters/opencode/AGENTS.relay.md
+  # opencode has no SessionStart-style "inject into context" hook; the native
+  # equivalent is the `instructions` array in opencode.json, loaded as system
+  # context at every session start. We point it at a snapshot file that
+  # /session-save and /relay-learn refresh after every write.
+  local cfg="" entry=".session-log/relay-instructions.md"
+  for f in opencode.jsonc opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
+  [ -n "$cfg" ] || cfg="opencode.json"
+  touch "$cfg"
+  grep -qF "$entry" "$cfg" 2>/dev/null && return 0    # idempotent
+  if command -v jq >/dev/null 2>&1; then
+    jq --arg p "$entry" '.instructions = ((.instructions // []) + [$p])' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$cfg" "$entry" <<'PY'
+import json, re, sys
+p, entry = sys.argv[1], sys.argv[2]
+with open(p) as f: raw = f.read()
+# strip JSONC comments (json is strict); preserve everything else
+stripped = re.sub(r'//.*$', '', raw, flags=re.MULTILINE)
+stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
+d = json.loads(stripped) if stripped.strip() else {}
+instr = d.setdefault("instructions", [])
+if entry not in instr: instr.append(entry)
+with open(p, "w") as f: json.dump(d, f, indent=2)
+PY
+  else
+    echo "relay: cannot auto-merge $cfg — add this path to the 'instructions' array manually:" >&2
+    echo "  $entry" >&2
+  fi
+  # seed an empty snapshot so the instructions path doesn't 404 before the first save
+  mkdir -p .session-log
+  [ -f "$entry" ] || printf '# Relay handoff will appear here after the first /session-save\n' > "$entry"
+}
+
 main() {
   local did=0
-  [ -d .claude ] && { copy_tool; wire_cc; did=1; }
-  [ -d .codex ]  && { copy_tool; wire_codex; did=1; }
+  [ -d .claude ]   && { copy_tool; wire_cc; did=1; }
+  [ -d .codex ]    && { copy_tool; wire_codex; did=1; }
+  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && { copy_tool; wire_opencode; did=1; }
   if [ "$did" = 0 ]; then
-    echo "relay: no .claude/ or .codex/ detected — nothing to wire. Re-run inside a Claude Code or Codex repo." >&2
+    echo "relay: no .claude/, .codex/, or .opencode/ detected — nothing to wire. Re-run inside a Claude Code, Codex, or opencode repo." >&2
     exit 0
   fi
   gitignore_data
