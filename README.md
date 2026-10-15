@@ -86,6 +86,23 @@ install also ships `.relay/tests/smoke-compact.sh`, the contract test for
 
 To run the full suite from a checkout: `bash tests/run.sh` (CI runs it on Ubuntu and macOS).
 
+## Update (repos that already have Relay)
+
+There is no separate update command: re-run the installer with `--detect` from the
+repo root. It replaces `.relay/relay.sh`, rewrites each CLI's `AGENTS.md` block in
+place, and leaves `.session-log/` alone.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --detect
+# or, from a local clone (installs whatever branch the clone is on):
+bash ~/Documents/GitHub/relay/install.sh --detect
+```
+
+Then commit the updated `.relay/` so other machines pick it up.
+
+Update before the next save after the index switched to tables: an older
+`relay.sh` keeps only the old one-line index entries and would drop the table rows.
+
 ## Use
 
 - **Load** is automatic: the last handoff, active knowledge, and the index are
@@ -171,7 +188,7 @@ drops the machinery a dogfood repo won't have:
 
 .session-log/        git-ignored · local-only
   latest.md          newest single-session handoff
-  index.md           one line per day, ≤ 10 days
+  index.md           table, one row per day, ≤ 10 days
   history/           one file per day, last 10 (older pruned)
   knowledge/         durable, never pruned
     index.md         derived cache — rebuilt from entry files every locked op
