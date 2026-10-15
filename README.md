@@ -40,10 +40,22 @@ This is Relay's core invariant and what keeps it portable:
 From the root of the repo you want Relay in:
 
 ```bash
-bash ~/Documents/GitHub/relay/install.sh            # asks which CLIs to wire
-bash ~/Documents/GitHub/relay/install.sh --clis claude,cursor   # no prompt
-bash ~/Documents/GitHub/relay/install.sh --detect   # wire only CLIs already present
-# offline single file: dist/install.sh takes the same flags
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash
+```
+
+Pass flags after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --clis claude,cursor   # no prompt
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --detect              # only CLIs already present
+```
+
+Or download it, read it, then run it: `curl -fsSLO https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh && bash install.sh`.
+
+With a local clone of this repo, run the source installer instead (same flags):
+
+```bash
+bash ~/Documents/GitHub/relay/install.sh
 ```
 
 The installer asks which CLIs to set up (Claude Code, Codex, OpenCode, Cursor, Grok Build),
