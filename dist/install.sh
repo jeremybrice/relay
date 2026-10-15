@@ -1421,8 +1421,29 @@ append_block() { # file, source-block
   local file="$1" src="$2"
   [ -f "$src" ] || return 0
   touch "$file"
-  # idempotent per adapter: each source's first line is its own header comment
-  grep -qF "$(head -n 1 "$src")" "$file" 2>/dev/null && return 0
+  # idempotent per adapter: each source's first line is its own header comment.
+  # Already present → replace that block in place so re-installs pick up new wording.
+  if grep -qF "$(head -n 1 "$src")" "$file" 2>/dev/null; then
+    awk -v mark="$MARK" -v endm="# <<< relay <<<" -v hdr="$(head -n 1 "$src")" -v src="$src" '
+      $0 == mark { inblk = 1; buf = $0 "\n"; next }
+      inblk {
+        buf = buf $0 "\n"
+        if ($0 == endm) {
+          inblk = 0
+          if (index(buf, hdr)) {
+            print mark
+            while ((getline line < src) > 0) print line
+            close(src)
+            print endm
+          } else printf "%s", buf
+        }
+        next
+      }
+      { print }
+      END { if (inblk) printf "%s", buf }
+    ' "$file" > "$file.relaytmp" && mv "$file.relaytmp" "$file"
+    return 0
+  fi
   { printf '\n%s\n' "$MARK"; cat "$src"; printf '%s\n' "# <<< relay <<<"; } >> "$file"
 }
 
@@ -1487,7 +1508,7 @@ wire_opencode() {
   # context at every session start. We point it at a snapshot file that
   # /session-save and /relay-learn refresh after every write.
   local cfg="" entry=".session-log/relay-instructions.md"
-  for f in opencode.jsonc opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
+  for f in opencode.jsonc opencode.json .opencode/opencode.jsonc .opencode/opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
   [ -n "$cfg" ] || cfg="opencode.json"
   [ -s "$cfg" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$cfg"
   grep -qF "$entry" "$cfg" 2>/dev/null && return 0    # idempotent
