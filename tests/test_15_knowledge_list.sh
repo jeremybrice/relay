@@ -15,5 +15,6 @@ assert_contains "$out" "conflict"
 # manually corrupt the index, then list rebuilds it from files (drift self-heals)
 printf 'garbage\n' > "$DIR/knowledge/index.md"
 "$RELAY" knowledge list --dir "$DIR" >/dev/null
-assert_contains "$(cat "$DIR/knowledge/index.md")" "lesson · types-first"
+assert_contains "$(cat "$DIR/knowledge/index.md")" "## Lessons"
+assert_match "$(cat "$DIR/knowledge/index.md")" "^\\| types-first +\\|"
 pass "knowledge list: active entries, conflict flag, index self-heal"

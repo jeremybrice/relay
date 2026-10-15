@@ -15,7 +15,7 @@ assert_contains "$hist" "session: 2"
 assert_contains "$(cat "$DIR/latest.md")" "second"
 assert_contains "$(cat "$DIR/latest.md")" "session: 2"
 # index shows the day exactly once, with the newest digest
-count="$(grep -c "^- $today " "$DIR/index.md")"
+count="$(grep -c "^| $today " "$DIR/index.md")"
 assert_eq "$count" "1"
 assert_contains "$(cat "$DIR/index.md")" "second digest"
 pass "same-day append + index dedup"

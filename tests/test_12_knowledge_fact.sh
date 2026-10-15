@@ -25,8 +25,7 @@ assert_file "$F/deploy-release-script.conflict"
 assert_contains "$(cat "$F/deploy-release-script.md")" "scripts/release.sh"
 assert_contains "$(cat "$F/deploy-release-script.conflict")" "Auth lives in src/auth/session.ts"
 # index marks the conflict
-assert_contains "$(cat "$DIR/knowledge/index.md")" "deploy-release-script · confirmed:2 · last:"
-assert_contains "$(cat "$DIR/knowledge/index.md")" "conflict:1"
+assert_match "$(cat "$DIR/knowledge/index.md")" "^\\| deploy-release-script +\\| 2 +\\| [0-9-]{10} \\| [^|]+\\| yes +\\|$"
 
 # --ttl persists a real freshness window (so the TTL read-side is not dead code)
 "$RELAY" knowledge add --fact --id current-sprint --ttl 14 "Sprint is the checkout rewrite." --dir "$DIR" >/dev/null

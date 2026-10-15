@@ -41,16 +41,46 @@ main() {
 
 to_epoch() { date -d "$1" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null; }
 
+_md_table() { # "Col1<TAB>Col2…"; TSV rows on stdin -> column-padded Markdown table
+  awk -F'\t' -v hdr="$1" '
+    function pad(s, w) { while (length(s) < w) s = s " "; return s }
+    function rule(w,   o) { o = ""; while (w-- > 0) o = o "-"; return o }
+    function row(a,   i, o) { o = "|"; for (i = 1; i <= nc; i++) o = o " " pad(a[i], w[i]) " |"; return o }
+    BEGIN { nc = split(hdr, h, "\t"); for (i = 1; i <= nc; i++) w[i] = length(h[i]) }
+    { n++; for (i = 1; i <= nc; i++) { c[n, i] = $i; if (length($i) > w[i]) w[i] = length($i) } }
+    END {
+      print row(h)
+      o = "|"; for (i = 1; i <= nc; i++) o = o rule(w[i] + 2) "|"; print o
+      for (r = 1; r <= n; r++) { for (i = 1; i <= nc; i++) a[i] = c[r, i]; print row(a) }
+    }'
+}
+
+_index_rows() { # index.md (table or legacy "- date — digest → history/…" lines) -> date<TAB>digest
+  awk '
+    /^\| [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \|/ {
+      split($0, f, "|"); d = f[2]; s = f[3]
+      gsub(/^ +| +$/, "", d); gsub(/^ +| +$/, "", s); print d "\t" s; next
+    }
+    /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] / {
+      d = substr($0, 3, 10); s = substr($0, 14)
+      sub(/^— /, "", s); sub(/ → history\/[^ ]*\.md$/, "", s); gsub(/\|/, "/", s); print d "\t" s
+    }' "$1"
+}
+
 _index_update() {
   local date="$1" digest="$2" idx="$DATA/index.md" tmp
+  digest="$(printf '%s' "$digest" | tr '\n\t|' '  /')"   # a pipe or line break would split the table row
   tmp="$(mktemp)"
-  printf '# Session index — last %s days\n' "$RELAY_WINDOW" > "$tmp"
-  printf -- '- %s — %s → history/%s.md\n' "$date" "$digest" "$date" >> "$tmp"
-  if [ -f "$idx" ]; then
-    grep '^- ' "$idx" 2>/dev/null | grep -v "^- $date " >> "$tmp" || true
-  fi
-  { sed -n '1p' "$tmp"; grep '^- ' "$tmp" | head -n "$RELAY_WINDOW"; } > "$idx"
-  rm -f "$tmp"
+  {
+    printf '# Session index (last %s days)\n\n' "$RELAY_WINDOW"
+    {
+      printf '%s\t%s\n' "$date" "$digest"
+      if [ -f "$idx" ]; then _index_rows "$idx"; fi
+    } | awk -F'\t' -v win="$RELAY_WINDOW" \
+          '!seen[$1]++ && ++n <= win { print $1 "\t" $2 "\t[" $1 "](history/" $1 ".md)" }' \
+      | _md_table $'Date\tSummary\tHistory'
+  } > "$tmp"
+  mv "$tmp" "$idx"
 }
 
 _unlock() { [ -n "${DATA:-}" ] && rm -rf "$DATA/.lock" 2>/dev/null || true; }
@@ -283,22 +313,32 @@ _write_lesson() { # file id seen sessions first last source body
 }
 
 _kindex() { # derived convenience cache; never load-bearing
-  local kd="$DATA/knowledge" idx tmp f id
+  local kd="$DATA/knowledge" idx tmp f id facts="" lessons=""
   mkdir -p "$kd"; idx="$kd/index.md"; tmp="$(mktemp)"
-  printf '# Knowledge index — derived from entry files; do not edit\n' > "$tmp"
   for f in "$kd"/facts/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"
-    printf 'fact · %s · confirmed:%s · last:%s · ttl:%s · conflict:%s\n' \
+    facts="$facts$(printf '%s\t%s\t%s\t%s\t%s' \
       "$id" "$(_fm "$f" confirmed)" "$(_fm "$f" last_confirmed)" "$(_fm "$f" ttl)" \
-      "$([ -f "$kd/facts/$id.conflict" ] && printf 1 || printf 0)" >> "$tmp"
+      "$([ -f "$kd/facts/$id.conflict" ] && printf yes || printf no)")"$'\n'
   done
   for f in "$kd"/lessons/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"
-    printf 'lesson · %s · seen:%s · sessions:%s · last:%s · status:active\n' \
-      "$id" "$(_fm "$f" seen)" "$(_fm "$f" sessions)" "$(_fm "$f" last_seen)" >> "$tmp"
+    lessons="$lessons$(printf '%s\t%s\t%s\t%s\tactive' \
+      "$id" "$(_fm "$f" seen)" "$(_fm "$f" sessions)" "$(_fm "$f" last_seen)")"$'\n'
   done
+  {
+    printf '# Knowledge index (derived from entry files; do not edit)\n'
+    if [ -n "$facts" ]; then
+      printf '\n## Facts\n\n'
+      printf '%s' "$facts" | _md_table $'ID\tConfirmed\tLast\tTTL\tConflict'
+    fi
+    if [ -n "$lessons" ]; then
+      printf '\n## Lessons\n\n'
+      printf '%s' "$lessons" | _md_table $'ID\tSeen\tSessions\tLast\tStatus'
+    fi
+  } > "$tmp"
   mv "$tmp" "$idx"
 }
 

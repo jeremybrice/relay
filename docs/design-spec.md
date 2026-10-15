@@ -125,14 +125,22 @@ digest: "Extracted handoff core; chose deterministic script + locking"
 ## Open questions # unresolved threads for the next agent
 ```
 
-`index.md` carries **one line per day** (the day's most-recent digest); there is
-no separate index database to keep in sync:
+`index.md` is a table with **one row per day** (the day's most-recent digest),
+newest first, columns padded so it reads cleanly raw or rendered. Pipes and line
+breaks in a digest are flattened in the index only (the history file keeps the
+original). There is no separate index database to keep in sync:
 
 ```markdown
-# Session index — last 10 days
-- 2026-06-20 — Extracted handoff core; chose deterministic script + locking → history/2026-06-20.md
-- 2026-06-19 — …
+# Session index (last 10 days)
+
+| Date       | Summary                                                      | History                             |
+|------------|--------------------------------------------------------------|-------------------------------------|
+| 2026-06-20 | Extracted handoff core; chose deterministic script + locking | [2026-06-20](history/2026-06-20.md) |
+| 2026-06-19 | …                                                            | [2026-06-19](history/2026-06-19.md) |
 ```
+
+A legacy line-format index (`- date — digest → history/date.md`) is migrated to
+the table on the next save.
 
 ## 6. Save operation
 
