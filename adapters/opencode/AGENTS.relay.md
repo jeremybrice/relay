@@ -1,5 +1,5 @@
 <!-- adapters/opencode/AGENTS.relay.md -->
-## Relay — session handoff (L2)
+## Relay — session handoff (OpenCode)
 At the START of a session, the last handoff + active knowledge load automatically
 via the `instructions` entry in `opencode.json` (from
 `.session-log/relay-instructions.md`). If that file is missing or empty, fall back

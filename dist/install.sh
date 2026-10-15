@@ -14,7 +14,7 @@ RELAY_FACT_STALE_DAYS="${RELAY_FACT_STALE_DAYS:-90}"
 RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
 }
 
 main() {
@@ -201,6 +201,8 @@ cmd_load() {
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
+  elif [ "$format" = "grok" ]; then
+    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
     printf '%s\n' "$out"
   fi
@@ -671,6 +673,16 @@ emit_adapters() {
   emit__adapters_codex_skills_relay_learn_SKILL_md > ".relay/adapters/codex/skills/relay-learn/SKILL.md"
   mkdir -p ".relay/adapters/codex/skills/session-save"
   emit__adapters_codex_skills_session_save_SKILL_md > ".relay/adapters/codex/skills/session-save/SKILL.md"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_AGENTS_relay_md > ".relay/adapters/grok/AGENTS.relay.md"
+  mkdir -p ".relay/adapters/grok/commands"
+  emit__adapters_grok_commands_relay_learn_md > ".relay/adapters/grok/commands/relay-learn.md"
+  mkdir -p ".relay/adapters/grok/commands"
+  emit__adapters_grok_commands_session_save_md > ".relay/adapters/grok/commands/session-save.md"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_hooks_relay_json > ".relay/adapters/grok/hooks.relay.json"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_relay_session_start_sh > ".relay/adapters/grok/relay-session-start.sh"
   mkdir -p ".relay/adapters/opencode"
   emit__adapters_opencode_AGENTS_relay_md > ".relay/adapters/opencode/AGENTS.relay.md"
   mkdir -p ".relay/adapters/opencode/commands"
@@ -683,7 +695,7 @@ emit_adapters() {
 
 emit__adapters_claude_code_CLAUDE_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/claude-code/CLAUDE.relay.md -->
-## Relay — session handoff (L2)
+## Relay — session handoff (Claude Code)
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
@@ -771,7 +783,7 @@ RELAY_EOF
 
 emit__adapters_codex_AGENTS_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/codex/AGENTS.relay.md -->
-## Relay — session handoff (L2 + load fallback)
+## Relay — session handoff (Codex)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
 first — they are the last agent's handoff. When wrapping up ("done for today" /
 "continue tomorrow"), run `$session-save` to persist a new handoff; offer it if unsure.
@@ -857,9 +869,114 @@ Persist a Relay handoff for the next agent.
 RELAY_EOF
 }
 
+emit__adapters_grok_AGENTS_relay_md() { cat <<'RELAY_EOF'
+<!-- adapters/grok/AGENTS.relay.md -->
+## Relay — session handoff (Grok Build)
+At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
+first — they are the last agent's handoff. When wrapping up ("done for today" /
+"continue tomorrow"), run `/session-save` to persist a new handoff; offer it if unsure.
+At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
+`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+
+RELAY_EOF
+}
+
+emit__adapters_grok_commands_relay_learn_md() { cat <<'RELAY_EOF'
+<!-- adapters/grok/commands/relay-learn.md -->
+---
+description: Record a durable fact or lesson about this repo into Relay knowledge
+---
+Capture a single durable piece of knowledge about THIS repo for future sessions.
+
+1. Decide the kind:
+   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
+   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
+2. For a fact, first check for an existing match so you reuse its id instead of
+   duplicating:
+
+   ```bash
+   "${GROK_WORKSPACE_ROOT:-$PWD}/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
+     --dir "${GROK_WORKSPACE_ROOT:-$PWD}/.session-log"
+   ```
+3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
+   `--ttl <days>` to a fact that is only true for a while (e.g. the current sprint);
+   omit it for durable truths:
+
+   ```bash
+   "${GROK_WORKSPACE_ROOT:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
+     --dir "${GROK_WORKSPACE_ROOT:-$PWD}/.session-log"
+   # time-bound fact: ... knowledge add --fact --id current-sprint --ttl 14 '...' --dir ...
+   # or a lesson:
+   "${GROK_WORKSPACE_ROOT:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
+     --dir "${GROK_WORKSPACE_ROOT:-$PWD}/.session-log"
+   ```
+4. If the tool reports a lesson is graduation-ready, offer (one line) to run
+   `knowledge graduate <slug>` — never graduate without the user's okay.
+
+RELAY_EOF
+}
+
+emit__adapters_grok_commands_session_save_md() { cat <<'RELAY_EOF'
+<!-- adapters/grok/commands/session-save.md -->
+---
+description: Save a Relay handoff so the next Grok session can pick up where you left off
+---
+Persist a Relay handoff for the next agent.
+
+1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
+   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
+   files/paths and dated facts. Compose a one-line digest.
+2. Persist it. The script owns all file writes, rotation, and locking:
+
+   ```bash
+   printf '%s\n' '<<the six sections as markdown>>' \
+     | "${GROK_WORKSPACE_ROOT:-$PWD}/.relay/relay.sh" save \
+         --dir "${GROK_WORKSPACE_ROOT:-$PWD}/.session-log" \
+         --digest '<<one-line digest>>'
+   ```
+3. Reply: "Handoff saved for the next session."
+4. Then capture durable knowledge from this session (skip if none): for each
+   permanent repo truth run `knowledge add --fact --near` then `--fact --id <slug>`;
+   for each behavioral lesson run `knowledge add --lesson --id <slug>`. Use
+   `"${GROK_WORKSPACE_ROOT:-$PWD}/.relay/relay.sh"` and
+   `--dir "${GROK_WORKSPACE_ROOT:-$PWD}/.session-log"`.
+   If the tool says a lesson is graduation-ready, offer graduation in one line.
+
+RELAY_EOF
+}
+
+emit__adapters_grok_hooks_relay_json() { cat <<'RELAY_EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash .relay/adapters/grok/relay-session-start.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+
+RELAY_EOF
+}
+
+emit__adapters_grok_relay_session_start_sh() { cat <<'RELAY_EOF'
+#!/usr/bin/env bash
+# Grok SessionStart hook → emits {"systemMessage":<handoff>} JSON (Grok reads only
+# a top-level systemMessage from observe-only events). AGENTS.md is the fallback.
+set -euo pipefail
+ROOT="${GROK_WORKSPACE_ROOT:-$PWD}"
+[ -x "$ROOT/.relay/relay.sh" ] || exit 0
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok 2>/dev/null || true
+exit 0
+
+RELAY_EOF
+}
+
 emit__adapters_opencode_AGENTS_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/opencode/AGENTS.relay.md -->
-## Relay — session handoff (L2)
+## Relay — session handoff (OpenCode)
 At the START of a session, the last handoff + active knowledge load automatically
 via the `instructions` entry in `opencode.json` (from
 `.session-log/relay-instructions.md`). If that file is missing or empty, fall back
@@ -971,14 +1088,24 @@ RELAY_EOF
 
 #!/usr/bin/env bash
 # install.sh — lay Relay into the current repo. (Bundled release embeds sources; --from uses a source tree.)
+# usage: install.sh [--clis claude,codex,opencode,grok] [--detect] [--from SRC]
+#   no flags + a terminal → asks which CLIs to wire (detected ones pre-checked)
+#   --clis              → wire exactly these, no prompt
+#   --detect / no tty   → wire whatever CLIs are already present in the repo
 set -euo pipefail
 MARK="# >>> relay >>>"
-FROM=""; [ "${1:-}" = "--from" ] && FROM="$2"
+FROM="" CLIS="" DETECT=0
+ALL_CLIS="claude codex opencode grok"
+
+usage() {
+  echo "usage: install.sh [--clis claude,codex,opencode,grok] [--detect] [--from SRC]" >&2
+}
 
 copy_tool() {
   mkdir -p .relay
   if [ -n "$FROM" ]; then
     cp "$FROM/relay.sh" .relay/relay.sh
+    rm -rf .relay/adapters                 # tool-owned; replace so re-runs don't nest adapters/adapters
     cp -R "$FROM/adapters" .relay/adapters
   else
     emit_relay > .relay/relay.sh        # emit_* funcs exist only in the bundled install.sh (Task 10)
@@ -998,7 +1125,8 @@ append_block() { # file, source-block
   local file="$1" src="$2"
   [ -f "$src" ] || return 0
   touch "$file"
-  grep -qF "$MARK" "$file" 2>/dev/null && return 0
+  # idempotent per adapter: each source's first line is its own header comment
+  grep -qF "$(head -n 1 "$src")" "$file" 2>/dev/null && return 0
   { printf '\n%s\n' "$MARK"; cat "$src"; printf '%s\n' "# <<< relay <<<"; } >> "$file"
 }
 
@@ -1049,7 +1177,7 @@ wire_opencode() {
   local cfg="" entry=".session-log/relay-instructions.md"
   for f in opencode.jsonc opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
   [ -n "$cfg" ] || cfg="opencode.json"
-  touch "$cfg"
+  [ -s "$cfg" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$cfg"
   grep -qF "$entry" "$cfg" 2>/dev/null && return 0    # idempotent
   if command -v jq >/dev/null 2>&1; then
     jq --arg p "$entry" '.instructions = ((.instructions // []) + [$p])' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
@@ -1075,16 +1203,118 @@ PY
   [ -f "$entry" ] || printf '# Relay handoff will appear here after the first /session-save\n' > "$entry"
 }
 
+wire_grok() {
+  mkdir -p .grok/commands .grok/hooks
+  [ -d .relay/adapters/grok/commands ] && cp .relay/adapters/grok/commands/*.md .grok/commands/ 2>/dev/null || true
+  append_block AGENTS.md .relay/adapters/grok/AGENTS.relay.md
+  # Grok reads project hooks from .grok/hooks/*.json (after /hooks-trust)
+  [ -f .grok/hooks/relay.json ] || cp .relay/adapters/grok/hooks.relay.json .grok/hooks/relay.json
+}
+
+cli_label() {
+  case "$1" in
+    claude) echo "Claude Code";; codex) echo "Codex";;
+    opencode) echo "OpenCode";; grok) echo "Grok Build";;
+  esac
+}
+
+detect_clis() {
+  local found=""
+  [ -d .claude ] && found="$found claude"
+  [ -d .codex ]  && found="$found codex"
+  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && found="$found opencode"
+  [ -d .grok ]   && found="$found grok"
+  echo "${found# }"
+}
+
+normalize_clis() { # comma/space list with aliases → canonical space list, in ALL_CLIS order
+  local raw out="" c
+  raw=" $(printf '%s' "$1" | tr ',[:upper:]' ' [:lower:]') "
+  raw="$(printf '%s' "$raw" | sed -e 's/ claude-code / claude /g; s/ cc / claude /g; s/ open-code / opencode /g; s/ grok-build / grok /g')"
+  for c in $raw; do
+    case " $ALL_CLIS all " in *" $c "*) ;; *) echo "relay: unknown CLI '$c' (choose from: $ALL_CLIS)" >&2; return 2;; esac
+  done
+  for c in $ALL_CLIS; do
+    case "$raw" in *" $c "*|*" all "*) out="$out $c";; esac
+  done
+  echo "${out# }"
+}
+
+prompt_clis() { # $1 = tty to read from; $2 = pre-selected list
+  local tty="$1" sel=" $2 " c i m ans n
+  exec 3<"$tty"                            # open once so each read advances
+  while :; do
+    {
+      echo ""
+      echo "Which CLIs should Relay be wired for in this repo?"
+      i=1
+      for c in $ALL_CLIS; do
+        case "$sel" in *" $c "*) m="x";; *) m=" ";; esac
+        printf '  %d) [%s] %s\n' "$i" "$m" "$(cli_label "$c")"
+        i=$((i + 1))
+      done
+      printf 'Toggle by number (e.g. "1 4"), "a" = all, "n" = none, Enter = done: '
+    } >&2
+    IFS= read -r ans <&3 || ans=""
+    [ -z "$ans" ] && break
+    for n in $(printf '%s' "$ans" | tr ',' ' '); do
+      case "$n" in
+        a|A) sel=" $ALL_CLIS ";;
+        n|N) sel=" ";;
+        [1-4]) c="$(echo $ALL_CLIS | cut -d' ' -f"$n")"
+               case "$sel" in *" $c "*) sel="$(printf '%s' "$sel" | sed "s/ $c / /")";; *) sel="$sel$c ";; esac;;
+        *) echo "relay: ignoring '$n'" >&2;;
+      esac
+    done
+  done
+  exec 3<&-
+  normalize_clis "$sel"
+}
+
 main() {
-  local did=0
-  [ -d .claude ]   && { copy_tool; wire_cc; did=1; }
-  [ -d .codex ]    && { copy_tool; wire_codex; did=1; }
-  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && { copy_tool; wire_opencode; did=1; }
-  if [ "$did" = 0 ]; then
-    echo "relay: no .claude/, .codex/, or .opencode/ detected — nothing to wire. Re-run inside a Claude Code, Codex, or opencode repo." >&2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from)   [ $# -ge 2 ] || { usage; exit 2; }; FROM="$2"; shift 2;;
+      --clis)   [ $# -ge 2 ] || { usage; exit 2; }; CLIS="$2"; shift 2;;
+      --clis=*) CLIS="${1#--clis=}"; shift;;
+      --detect) DETECT=1; shift;;
+      -h|--help) usage; exit 0;;
+      *) echo "relay: unknown option '$1'" >&2; usage; exit 2;;
+    esac
+  done
+
+  local selected detected
+  detected="$(detect_clis)"
+  if [ -n "$CLIS" ]; then
+    selected="$(normalize_clis "$CLIS")" || exit 2
+  elif [ "$DETECT" = 1 ]; then
+    selected="$detected"
+  elif [ -n "${RELAY_TTY:-}" ]; then        # test hook: answers come from a file
+    selected="$(prompt_clis "$RELAY_TTY" "$detected")"
+  elif [ -t 0 ]; then
+    selected="$(prompt_clis /dev/stdin "$detected")"
+  elif { : </dev/tty; } 2>/dev/null; then    # piped install (curl | bash) still has a terminal
+    selected="$(prompt_clis /dev/tty "$detected")"
+  else
+    selected="$detected"
+  fi
+
+  if [ -z "$selected" ]; then
+    echo "relay: no CLIs selected or detected — nothing to wire. Re-run with --clis claude,codex,opencode,grok." >&2
     exit 0
   fi
+
+  copy_tool
+  local c
+  for c in $selected; do
+    case "$c" in
+      claude) wire_cc;; codex) wire_codex;; opencode) wire_opencode;; grok) wire_grok;;
+    esac
+  done
   gitignore_data
-  echo "relay: installed. Handoffs will accumulate in .session-log/ (gitignored)."
+  local labels=""
+  for c in $selected; do labels="$labels, $(cli_label "$c")"; done
+  echo "relay: installed for ${labels#, }. Handoffs will accumulate in .session-log/ (gitignored)."
+  case " $selected " in *" grok "*) echo "relay: in Grok, run /hooks-trust once so the SessionStart hook can load the handoff.";; esac
 }
 main "$@"

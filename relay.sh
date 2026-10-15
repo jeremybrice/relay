@@ -13,7 +13,7 @@ RELAY_FACT_STALE_DAYS="${RELAY_FACT_STALE_DAYS:-90}"
 RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
 }
 
 main() {
@@ -200,6 +200,8 @@ cmd_load() {
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
+  elif [ "$format" = "grok" ]; then
+    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
     printf '%s\n' "$out"
   fi

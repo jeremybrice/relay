@@ -15,7 +15,7 @@ assert_file "$SRC/adapters/opencode/instructions.relay.jsonc"
 ( cd "$SRC" && bash bundle.sh )
 assert_file "$SRC/dist/install.sh"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/.claude"; ( cd "$TMP" && git init -q )
-( cd "$TMP" && bash "$SRC/dist/install.sh" )
+( cd "$TMP" && bash "$SRC/dist/install.sh" --detect )
 assert_file "$TMP/.claude/commands/relay-learn.md"
 assert_file "$TMP/.relay/relay.sh"
 
@@ -25,7 +25,7 @@ assert_file "$TMP/.session-log/knowledge/lessons/e2e.md"
 
 # bundle also offline-installs into a fresh opencode repo and wires /session-save
 TMP2="$(mktemp -d)"; mkdir -p "$TMP2/.opencode"; ( cd "$TMP2" && git init -q )
-( cd "$TMP2" && bash "$SRC/dist/install.sh" )
+( cd "$TMP2" && bash "$SRC/dist/install.sh" --detect )
 assert_file "$TMP2/.opencode/commands/session-save.md"
 assert_file "$TMP2/.opencode/commands/relay-learn.md"
 assert_file "$TMP2/.session-log/relay-instructions.md"

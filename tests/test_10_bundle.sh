@@ -7,7 +7,7 @@ assert_file "$SRC/dist/install.sh"
 
 # the bundled installer works with NO source tree (offline), in a fresh CC repo
 TMP="$(mktemp -d)"; mkdir -p "$TMP/.claude"; ( cd "$TMP" && git init -q )
-( cd "$TMP" && bash "$SRC/dist/install.sh" )
+( cd "$TMP" && bash "$SRC/dist/install.sh" --detect )
 assert_file "$TMP/.relay/relay.sh"
 ( cd "$TMP" && printf '## Summary\nbundled ok\n' | .relay/relay.sh save --dir "$TMP/.session-log" --digest "d" )
 assert_contains "$(cd "$TMP" && .relay/relay.sh load --dir "$TMP/.session-log")" "bundled ok"

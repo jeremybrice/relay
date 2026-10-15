@@ -37,16 +37,29 @@ This is Relay's core invariant and what keeps it portable:
 
 ## Install (in any repo)
 
+From the root of the repo you want Relay in:
+
 ```bash
-curl -fsSL https://<host>/relay/install.sh | bash
-# or: download install.sh, read it, then `bash install.sh`
+bash ~/Documents/GitHub/relay/install.sh            # asks which CLIs to wire
+bash ~/Documents/GitHub/relay/install.sh --clis claude,grok   # no prompt
+bash ~/Documents/GitHub/relay/install.sh --detect   # wire only CLIs already present
+# offline single file: dist/install.sh takes the same flags
 ```
 
-The installer detects the harness(es) present, lays down `.relay/` (the tool —
-committed, travels via git), wires the `SessionStart` hook plus a save command for
-each harness, gitignores `.session-log/` (your handoffs and knowledge — local
-only), and plants the `<!-- relay:learned -->` anchor in `CLAUDE.md`/`AGENTS.md`.
-It is additive and reversible — nothing existing is rewritten.
+The installer asks which CLIs to set up (Claude Code, Codex, OpenCode, Grok Build),
+with any already present in the repo pre-checked. Toggle by number, `a` for all,
+Enter to finish. Without a terminal it falls back to `--detect`. It then lays down
+`.relay/` (the tool — committed, travels via git), wires a session-start load plus
+save commands for each chosen CLI, gitignores `.session-log/` (your handoffs and
+knowledge — local only), and appends one labeled block per CLI to `CLAUDE.md` /
+`AGENTS.md`. It is additive, idempotent, and reversible — nothing existing is rewritten.
+
+| CLI | Load at session start | Save / learn |
+|-----|-----------------------|--------------|
+| Claude Code | `SessionStart` hook in `.claude/settings.json` | `/session-save`, `/relay-learn` |
+| Codex | `SessionStart` hook in `.codex/config.toml` + `AGENTS.md` fallback | `$session-save`, `$relay-learn` |
+| OpenCode | `instructions` snapshot in `opencode.json` | `/session-save`, `/relay-learn` |
+| Grok Build | `.grok/hooks/relay.json` (run `/hooks-trust` once) + `AGENTS.md` fallback | `/session-save`, `/relay-learn` |
 
 ## Use
 
