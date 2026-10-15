@@ -84,6 +84,8 @@ Claude Code, Cursor, and Grok share one skill set (`adapters/skills/`). Every
 install also ships `.relay/tests/smoke-compact.sh`, the contract test for
 `knowledge compact` / `restore`.
 
+To run the full suite from a checkout: `bash tests/run.sh` (CI runs it on Ubuntu and macOS).
+
 ## Use
 
 - **Load** is automatic: the last handoff, active knowledge, and the index are

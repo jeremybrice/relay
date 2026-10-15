@@ -399,7 +399,7 @@ types before touching call-sites…</pre>
     <div class="stack">
       <div class="slot core"><span class="ix">1</span><div><div class="st">Recency line</div><div class="sd">"Last saved 2026-06-22 (today)" · ⚠ flag if &gt; 3 days stale</div></div></div>
       <div class="slot ephem"><span class="ix">2</span><div><div class="st">latest.md — the headline handoff</div><div class="sd">most recent session, in full</div></div><span class="budget">RELAY_WORD_CAP ≈ 800</span></div>
-      <div class="slot ephem"><span class="ix">3</span><div><div class="st">Today's earlier sessions</div><div class="sd">only on multi-session days · per the full-day-load spec</div></div><span class="budget">shared cap</span></div>
+      <div class="slot ephem"><span class="ix">3</span><div><div class="st">Today's earlier sessions</div><div class="sd">only on multi-session days · not yet implemented</div></div><span class="budget">shared cap</span></div>
       <div class="slot dur"><span class="ix">4</span><div><div class="st">Facts &nbsp;<span class="tag dur">NEW</span></div><div class="sd">ranked by <code>confirmed × recency</code> · over cap → explicit <b>"14 of 31 shown"</b> line, never silent · TTL-expired + conflicts flagged</div></div><span class="budget">RELAY_FACTS_CAP</span></div>
       <div class="slot dur"><span class="ix">5</span><div><div class="st">Active lessons &nbsp;<span class="tag dur">NEW</span></div><div class="sd">non-graduated only, ranked by <code>seen</code> desc · over cap → explicit count, never silent</div></div><span class="budget">RELAY_LESSONS_CAP</span></div>
       <div class="slot ephem"><span class="ix">6</span><div><div class="st">index.md — the ≤10-day map</div><div class="sd">verbatim breadcrumbs</div></div></div>
@@ -562,7 +562,7 @@ relay <span class="k">load</span> [<span class="n">--format</span> codex]</pre>
     <div class="card dur"><h4><span class="tag dur">enh</span> <code>confirmed</code> + TTL</h4><p>A fact reinforcement counter (free confidence proxy) and an optional freshness window revalidated lazily at load — staleness needs no scheduler.</p></div>
     <div class="card grad"><h4><span class="tag grad">enh</span> Conflict markers</h4><p>Git's "never auto-resolve, always surface" discipline for contradictory facts: both sides kept, flagged at load, <code>resolve</code> picks one.</p></div>
   </div>
-  <div class="callout dur" style="margin-top:18px"><b>Verdict the three agents shared:</b> the architecture is sound and buildable in deterministic bash 3.2 — the fragility was <i>concentrated</i> in two contracts (fact <code>id</code> + <code>index.md</code>), not pervasive. Both are now pinned. Full review: <span class="pathline">2026-06-22-relay-learning-design-review.md</span></div>
+  <div class="callout dur" style="margin-top:18px"><b>Verdict the three agents shared:</b> the architecture is sound and buildable in deterministic bash 3.2 — the fragility was <i>concentrated</i> in two contracts (fact <code>id</code> + <code>index.md</code>), not pervasive. Both are now pinned.</div>
 </section>
 
 </main>
