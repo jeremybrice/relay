@@ -753,7 +753,6 @@ k_export() {
 }
 
 main "$@"
-
 RELAY_EOF
 }
 
@@ -832,7 +831,6 @@ first — they are the last agent's handoff. When wrapping up ("done for today" 
 "continue tomorrow"), run `$session-save` to persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
-
 RELAY_EOF
 }
 
@@ -840,7 +838,6 @@ emit__adapters_codex_hooks_relay_toml() { cat <<'RELAY_EOF'
 # adapters/codex/hooks.relay.toml — merge into .codex/config.toml
 [[hooks.SessionStart]]
 command = [".relay/adapters/codex/relay-session-start.sh"]
-
 RELAY_EOF
 }
 
@@ -852,7 +849,6 @@ ROOT="${CODEX_PROJECT_DIR:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
 "$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex 2>/dev/null || true
 exit 0
-
 RELAY_EOF
 }
 
@@ -924,7 +920,6 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
      --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
    ```
 4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>` — only with the user's okay.
-
 RELAY_EOF
 }
 
@@ -954,7 +949,6 @@ Persist a Relay handoff for the next agent.
 If `knowledge list` reports counts over cap (or the session-start load warned
 "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run it
 unasked.
-
 RELAY_EOF
 }
 
@@ -1028,7 +1022,6 @@ continue tomorrow", or a task completes and we're winding down), run
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
-
 RELAY_EOF
 }
 
@@ -1120,7 +1113,6 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
    ```
 5. If the tool reports a lesson is graduation-ready, offer (one line) to run
    `knowledge graduate <slug>` — never graduate without the user's okay.
-
 RELAY_EOF
 }
 
@@ -1161,7 +1153,6 @@ Persist a Relay handoff for the next agent.
 6. If `knowledge list` reports counts over cap (or step 4's load warned
    "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run
    it unasked.
-
 RELAY_EOF
 }
 
@@ -1176,7 +1167,6 @@ emit__adapters_opencode_instructions_relay_jsonc() { cat <<'RELAY_EOF'
   "$schema": "https://opencode.ai/config.json",
   "instructions": [".session-log/relay-instructions.md"]
 }
-
 RELAY_EOF
 }
 

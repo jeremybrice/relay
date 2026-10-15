@@ -35,4 +35,3 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
    ```
 5. If the tool reports a lesson is graduation-ready, offer (one line) to run
    `knowledge graduate <slug>` — never graduate without the user's okay.
-

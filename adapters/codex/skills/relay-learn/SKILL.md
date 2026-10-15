@@ -22,4 +22,3 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
      --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
    ```
 4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>` — only with the user's okay.
-

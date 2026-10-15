@@ -23,4 +23,3 @@ Persist a Relay handoff for the next agent.
 If `knowledge list` reports counts over cap (or the session-start load warned
 "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run it
 unasked.
-
