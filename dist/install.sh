@@ -202,7 +202,7 @@ cmd_load() {
   local kblock; kblock="$(_load_knowledge)"
   [ -n "$kblock" ] && out="$out"$'\n\n'"$kblock"
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
-  out="$out"$'\n\nOpen .session-log/history/<date>.md for the full detail of an earlier day.'
+  out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
@@ -408,8 +408,13 @@ k_resolve() {
 
 _instruction_file() {
   if [ -n "${RELAY_INSTRUCTION_FILE:-}" ]; then printf '%s' "$RELAY_INSTRUCTION_FILE"; return; fi
-  if   [ -f "$PWD/CLAUDE.md" ]; then printf '%s' "$PWD/CLAUDE.md"
-  elif [ -f "$PWD/AGENTS.md" ]; then printf '%s' "$PWD/AGENTS.md"
+  local f
+  # a file already holding graduated blocks stays the target (older installs used CLAUDE.md)
+  for f in AGENTS.md CLAUDE.md; do
+    grep -qF '<!-- relay:learned:' "$PWD/$f" 2>/dev/null && { printf '%s' "$PWD/$f"; return; }
+  done
+  # AGENTS.md is read by every supported CLI, Claude Code included
+  if [ -f "$PWD/AGENTS.md" ] || [ ! -f "$PWD/CLAUDE.md" ]; then printf '%s' "$PWD/AGENTS.md"
   else printf '%s' "$PWD/CLAUDE.md"; fi
 }
 
@@ -758,7 +763,7 @@ RELAY_EOF
 
 emit_adapters() {
   mkdir -p ".relay/adapters/claude-code"
-  emit__adapters_claude_code_CLAUDE_relay_md > ".relay/adapters/claude-code/CLAUDE.relay.md"
+  emit__adapters_claude_code_AGENTS_relay_md > ".relay/adapters/claude-code/AGENTS.relay.md"
   mkdir -p ".relay/adapters/claude-code"
   emit__adapters_claude_code_relay_session_start_sh > ".relay/adapters/claude-code/relay-session-start.sh"
   mkdir -p ".relay/adapters/codex"
@@ -799,9 +804,13 @@ emit_adapters() {
   emit__adapters_skills_session_save_SKILL_md > ".relay/adapters/skills/session-save/SKILL.md"
 }
 
-emit__adapters_claude_code_CLAUDE_relay_md() { cat <<'RELAY_EOF'
-<!-- adapters/claude-code/CLAUDE.relay.md -->
+emit__adapters_claude_code_AGENTS_relay_md() { cat <<'RELAY_EOF'
+<!-- adapters/claude-code/AGENTS.relay.md -->
 ## Relay — session handoff (Claude Code)
+The last handoff, active knowledge, and the session index load at session start
+via the SessionStart hook. They are summaries only: if the current task touches
+work from an earlier day listed in the index, open that day's
+`.session-log/history/<date>.md` before starting.
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
@@ -827,8 +836,12 @@ emit__adapters_codex_AGENTS_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/codex/AGENTS.relay.md -->
 ## Relay — session handoff (Codex)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
-first — they are the last agent's handoff. When wrapping up ("done for today" /
-"continue tomorrow"), run `$session-save` to persist a new handoff; offer it if unsure.
+first — they are the last agent's handoff.
+If the current task touches work from an earlier day listed in `index.md`,
+open that day's `.session-log/history/<date>.md` before starting — the handoff
+and index are summaries only.
+When wrapping up ("done for today" / "continue tomorrow"), run `$session-save` to
+persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
 RELAY_EOF
@@ -957,6 +970,9 @@ emit__adapters_cursor_AGENTS_relay_md() { cat <<'RELAY_EOF'
 ## Relay — session handoff (Cursor)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
 if they exist — they are the last agent's handoff. If missing, continue.
+If the current task touches work from an earlier day listed in `index.md`,
+open that day's `.session-log/history/<date>.md` before starting — the handoff
+and index are summaries only.
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
@@ -972,6 +988,9 @@ emit__adapters_grok_AGENTS_relay_md() { cat <<'RELAY_EOF'
 ## Relay — session handoff (Grok Build)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
 if they exist — they are the last agent's handoff. If missing, continue.
+If the current task touches work from an earlier day listed in `index.md`,
+open that day's `.session-log/history/<date>.md` before starting — the handoff
+and index are summaries only.
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
@@ -1016,6 +1035,9 @@ At the START of a session, the last handoff + active knowledge load automaticall
 via the `instructions` entry in `opencode.json` (from
 `.session-log/relay-instructions.md`). If that file is missing or empty, fall back
 to reading `.session-log/latest.md` and `.session-log/index.md` directly.
+If the current task touches work from an earlier day listed in `index.md`,
+open that day's `.session-log/history/<date>.md` before starting — the handoff
+and index are summaries only.
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
@@ -1447,6 +1469,23 @@ append_block() { # file, source-block
   { printf '\n%s\n' "$MARK"; cat "$src"; printf '%s\n' "# <<< relay <<<"; } >> "$file"
 }
 
+remove_block() { # file, header — drop the relay block carrying this header (adapter moved files)
+  local file="$1" hdr="$2"
+  [ -f "$file" ] && grep -qF "$hdr" "$file" || return 0
+  awk -v mark="$MARK" -v endm="# <<< relay <<<" -v hdr="$hdr" '
+    $0 == mark { inblk = 1; buf = $0 "\n"; next }
+    inblk {
+      buf = buf $0 "\n"
+      if ($0 == endm) { inblk = 0; if (!index(buf, hdr)) printf "%s", buf }
+      next
+    }
+    { print }
+    END { if (inblk) printf "%s", buf }
+  ' "$file" > "$file.relaytmp" && mv "$file.relaytmp" "$file"
+  # relay created it and nothing else is left → remove it rather than leave an empty file
+  grep -q '[^[:space:]]' "$file" || rm -f "$file"
+}
+
 copy_skills() { # dest skills dir — the shared session-save / relay-learn / relay-compact skills
   local dest="$1" d
   mkdir -p "$dest"
@@ -1466,7 +1505,9 @@ drop_legacy_commands() { # dir prefix — remove Relay-owned command files from 
 wire_cc() {
   copy_skills .claude/skills
   drop_legacy_commands .claude/commands claude-code
-  append_block CLAUDE.md .relay/adapters/claude-code/CLAUDE.relay.md
+  remove_block CLAUDE.md "<!-- adapters/claude-code/CLAUDE.relay.md -->"   # pre-AGENTS.md installs
+  remove_block CLAUDE.md "## Relay — session handoff (L2)"                 # oldest, header-less installs
+  append_block AGENTS.md .relay/adapters/claude-code/AGENTS.relay.md
   local hook=".relay/adapters/claude-code/relay-session-start.sh"
   local sj=".claude/settings.json"
   local entry

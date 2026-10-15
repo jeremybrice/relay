@@ -1,0 +1,18 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/run.sh
+      - run: bash tests/smoke-compact.sh
+      - name: dist/install.sh is up to date with sources
+        run: git diff --exit-code dist/install.sh

@@ -28,7 +28,6 @@ assert_contains "$(cat "$SRC/adapters/opencode/commands/relay-learn.md")" "knowl
 assert_contains "$(cat "$SRC/adapters/opencode/AGENTS.relay.md")" "/session-save"
 assert_contains "$(cat "$SRC/adapters/opencode/instructions.relay.jsonc")" "relay-instructions.md"
 
-# regression guard: the L2 block must point at AGENTS.md (opencode's primary
-# instruction file), not CLAUDE.md — same convention as the codex adapter
+# the block names the `instructions` load path that opencode.json is wired to
 assert_contains "$(cat "$SRC/adapters/opencode/AGENTS.relay.md")" "instructions"
 pass "opencode adapter"

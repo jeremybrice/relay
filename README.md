@@ -63,12 +63,18 @@ with any already present in the repo pre-checked. Toggle by number, `a` for all,
 Enter to finish. Without a terminal it falls back to `--detect`. It then lays down
 `.relay/` (the tool — committed, travels via git), wires a session-start load plus
 save commands for each chosen CLI, gitignores `.session-log/` (your handoffs and
-knowledge — local only), and appends one labeled block per CLI to `CLAUDE.md` /
-`AGENTS.md`. It is additive, idempotent, and reversible — nothing existing is rewritten.
+knowledge — local only), and appends one labeled block per CLI to `AGENTS.md`
+(Claude Code reads it too). It is additive, idempotent, and reversible — nothing
+existing is rewritten. Re-installing over an older install moves Claude Code's block
+out of `CLAUDE.md` into `AGENTS.md`, leaving the rest of `CLAUDE.md` untouched.
+
+Each block also tells the agent that the handoff and index are summaries: when the
+task touches work from an earlier day, it should open that day's
+`.session-log/history/<date>.md` before starting.
 
 | CLI | Load at session start | Save / learn / compact |
 |-----|-----------------------|------------------------|
-| Claude Code | `SessionStart` hook in `.claude/settings.json` | `.claude/skills/` → `/session-save`, `/relay-learn`, `/relay-compact` |
+| Claude Code | `SessionStart` hook in `.claude/settings.json` + `AGENTS.md` block | `.claude/skills/` → `/session-save`, `/relay-learn`, `/relay-compact` |
 | Codex | `SessionStart` hook in `.codex/config.toml` + `AGENTS.md` fallback | `.codex/skills/` → `$session-save`, `$relay-learn`, `$relay-compact` |
 | OpenCode | `instructions` snapshot in `opencode.json` | `.opencode/commands/` → `/session-save`, `/relay-learn`, `/relay-compact` |
 | Cursor | `AGENTS.md` block (reads `.session-log/latest.md` + `index.md`) | `.cursor/skills/` → `session-save`, `relay-learn`, `relay-compact` |
@@ -77,6 +83,8 @@ knowledge — local only), and appends one labeled block per CLI to `CLAUDE.md` 
 Claude Code, Cursor, and Grok share one skill set (`adapters/skills/`). Every
 install also ships `.relay/tests/smoke-compact.sh`, the contract test for
 `knowledge compact` / `restore`.
+
+To run the full suite from a checkout: `bash tests/run.sh` (CI runs it on Ubuntu and macOS).
 
 ## Use
 
@@ -115,7 +123,8 @@ confidence math, no decay scheduler:
    coincidence seen three times in one afternoon can't masquerade as a pattern.
 3. **Ready** — at `sessions ≥ 3` (configurable via `RELAY_GRADUATE_AT`).
 4. **Graduated** — the agent **proposes**, you approve, and the lesson is written
-   as an id-keyed block into `CLAUDE.md`/`AGENTS.md` where the harness loads it
+   as an id-keyed block into `AGENTS.md` (or `CLAUDE.md`, if it already holds
+   graduated rules) where the harness loads it
    natively. This step is always gated — it's a persistent, behavior-changing
    edit to a file you may commit.
 
@@ -169,7 +178,7 @@ drops the machinery a dogfood repo won't have:
     facts/<id>.md    one file per fact   (+ superseded/ tombstones)
     lessons/<id>.md  one file per lesson (+ graduated/, superseded/)
 
-CLAUDE.md / AGENTS.md  gains a <!-- relay:learned --> block for graduated lessons
+AGENTS.md              gains a <!-- relay:learned --> block for graduated lessons
 ```
 
 Full design walkthrough:
