@@ -1623,6 +1623,11 @@ main() {
     esac
   done
 
+  # run from a source checkout (no embedded emit_* funcs) → use the checkout itself
+  if [ -z "$FROM" ] && ! command -v emit_relay >/dev/null 2>&1; then
+    FROM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  fi
+
   local selected detected
   detected="$(detect_clis)"
   if [ -n "$CLIS" ]; then

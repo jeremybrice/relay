@@ -29,3 +29,10 @@ assert_eq "$(grep -c 'adapters/opencode/AGENTS.relay.md' "$TMP/AGENTS.md")" "1"
 assert_contains "$(cat "$TMP/.opencode/opencode.json")" "relay-instructions.md"
 [ ! -e "$TMP/opencode.json" ] || { echo "FAIL: created a second root opencode.json"; exit 1; }
 pass "install upgrades blocks in place + .opencode/opencode.json"
+
+# a source checkout runs without --from (finds its own adapters)
+TMP2="$(mktemp -d)"; ( cd "$TMP2" && git init -q )
+( cd "$TMP2" && bash "$SRC/install.sh" --clis cursor </dev/null >/dev/null )
+assert_file "$TMP2/.cursor/skills/relay-compact/SKILL.md"
+[ -s "$TMP2/.relay/relay.sh" ] || { echo "FAIL: empty relay.sh"; exit 1; }
+pass "source install.sh works without --from"
