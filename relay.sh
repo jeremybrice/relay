@@ -201,7 +201,7 @@ cmd_load() {
   local kblock; kblock="$(_load_knowledge)"
   [ -n "$kblock" ] && out="$out"$'\n\n'"$kblock"
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
-  out="$out"$'\n\nOpen .session-log/history/<date>.md for the full detail of an earlier day.'
+  out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
@@ -407,8 +407,13 @@ k_resolve() {
 
 _instruction_file() {
   if [ -n "${RELAY_INSTRUCTION_FILE:-}" ]; then printf '%s' "$RELAY_INSTRUCTION_FILE"; return; fi
-  if   [ -f "$PWD/CLAUDE.md" ]; then printf '%s' "$PWD/CLAUDE.md"
-  elif [ -f "$PWD/AGENTS.md" ]; then printf '%s' "$PWD/AGENTS.md"
+  local f
+  # a file already holding graduated blocks stays the target (older installs used CLAUDE.md)
+  for f in AGENTS.md CLAUDE.md; do
+    grep -qF '<!-- relay:learned:' "$PWD/$f" 2>/dev/null && { printf '%s' "$PWD/$f"; return; }
+  done
+  # AGENTS.md is read by every supported CLI, Claude Code included
+  if [ -f "$PWD/AGENTS.md" ] || [ ! -f "$PWD/CLAUDE.md" ]; then printf '%s' "$PWD/AGENTS.md"
   else printf '%s' "$PWD/CLAUDE.md"; fi
 }
 

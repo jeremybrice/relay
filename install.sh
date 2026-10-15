@@ -68,6 +68,23 @@ append_block() { # file, source-block
   { printf '\n%s\n' "$MARK"; cat "$src"; printf '%s\n' "# <<< relay <<<"; } >> "$file"
 }
 
+remove_block() { # file, header — drop the relay block carrying this header (adapter moved files)
+  local file="$1" hdr="$2"
+  [ -f "$file" ] && grep -qF "$hdr" "$file" || return 0
+  awk -v mark="$MARK" -v endm="# <<< relay <<<" -v hdr="$hdr" '
+    $0 == mark { inblk = 1; buf = $0 "\n"; next }
+    inblk {
+      buf = buf $0 "\n"
+      if ($0 == endm) { inblk = 0; if (!index(buf, hdr)) printf "%s", buf }
+      next
+    }
+    { print }
+    END { if (inblk) printf "%s", buf }
+  ' "$file" > "$file.relaytmp" && mv "$file.relaytmp" "$file"
+  # relay created it and nothing else is left → remove it rather than leave an empty file
+  grep -q '[^[:space:]]' "$file" || rm -f "$file"
+}
+
 copy_skills() { # dest skills dir — the shared session-save / relay-learn / relay-compact skills
   local dest="$1" d
   mkdir -p "$dest"
@@ -87,7 +104,9 @@ drop_legacy_commands() { # dir prefix — remove Relay-owned command files from 
 wire_cc() {
   copy_skills .claude/skills
   drop_legacy_commands .claude/commands claude-code
-  append_block CLAUDE.md .relay/adapters/claude-code/CLAUDE.relay.md
+  remove_block CLAUDE.md "<!-- adapters/claude-code/CLAUDE.relay.md -->"   # pre-AGENTS.md installs
+  remove_block CLAUDE.md "## Relay — session handoff (L2)"                 # oldest, header-less installs
+  append_block AGENTS.md .relay/adapters/claude-code/AGENTS.relay.md
   local hook=".relay/adapters/claude-code/relay-session-start.sh"
   local sj=".claude/settings.json"
   local entry

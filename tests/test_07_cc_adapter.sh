@@ -15,5 +15,5 @@ assert_contains "$out" "Last saved:"
 
 # command + L2 files exist and reference the save path
 assert_contains "$(cat "$SRC/adapters/skills/session-save/SKILL.md")" "relay.sh"
-assert_contains "$(cat "$SRC/adapters/claude-code/CLAUDE.relay.md")" "/session-save"
+assert_contains "$(cat "$SRC/adapters/claude-code/AGENTS.relay.md")" "/session-save"
 pass "cc adapter"

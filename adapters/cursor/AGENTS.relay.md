@@ -2,6 +2,9 @@
 ## Relay — session handoff (Cursor)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
 if they exist — they are the last agent's handoff. If missing, continue.
+If the current task touches work from an earlier day listed in `index.md`,
+open that day's `.session-log/history/<date>.md` before starting — the handoff
+and index are summaries only.
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
