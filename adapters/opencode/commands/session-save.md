@@ -31,3 +31,7 @@ Persist a Relay handoff for the next agent.
    `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"`. Re-run the step-4 load
    after the knowledge writes so the snapshot stays current. If the tool says a
    lesson is graduation-ready, offer graduation in one line.
+6. If `knowledge list` reports counts over cap (or step 4's load warned
+   "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run
+   it unasked.
+

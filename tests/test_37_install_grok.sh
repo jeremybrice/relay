@@ -9,8 +9,11 @@ SRC="$(cd .. && pwd)"; TMP="$(mktemp -d)"
 ( cd "$TMP" && bash "$SRC/install.sh" --clis grok --from "$SRC" </dev/null )
 
 assert_file "$TMP/.relay/relay.sh"
-assert_file "$TMP/.grok/commands/session-save.md"
-assert_file "$TMP/.grok/commands/relay-learn.md"
+for s in session-save relay-learn relay-compact; do assert_file "$TMP/.grok/skills/$s/SKILL.md"; done
+# an old-layout Relay command is cleaned up on re-install; a user command is kept
+mkdir -p "$TMP/.grok/commands"
+printf '<!-- adapters/grok/commands/session-save.md -->\nold\n' > "$TMP/.grok/commands/session-save.md"
+printf 'mine\n' > "$TMP/.grok/commands/relay-learn.md"
 assert_file "$TMP/.grok/hooks/relay.json"
 assert_contains "$(cat "$TMP/.grok/hooks/relay.json")" "relay-session-start.sh"
 assert_contains "$(cat "$TMP/AGENTS.md")" "(Grok Build)"
@@ -24,6 +27,9 @@ assert_contains "$(cat "$TMP/.gitignore")" ".session-log/"
 ( cd "$TMP" && bash "$SRC/install.sh" --clis grok --from "$SRC" </dev/null )
 assert_eq "$(grep -c "(Grok Build)" "$TMP/AGENTS.md")" "1"
 [ ! -e "$TMP/.relay/adapters/adapters" ] || { echo "FAIL: nested adapters"; exit 1; }
+[ ! -e "$TMP/.grok/commands/session-save.md" ] || { echo "FAIL: legacy relay command kept"; exit 1; }
+assert_file "$TMP/.grok/commands/relay-learn.md"
+[ ! -e "$TMP/.grok/skills/relay-learn/relay-learn" ] || { echo "FAIL: nested skill"; exit 1; }
 
 # hook output: top-level systemMessage carrying the handoff
 ( cd "$TMP" && printf '## Summary\ngrok e2e ok\n' | .relay/relay.sh save --dir "$TMP/.session-log" --digest d )

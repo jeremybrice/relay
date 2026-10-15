@@ -8,3 +8,4 @@
   "$schema": "https://opencode.ai/config.json",
   "instructions": [".session-log/relay-instructions.md"]
 }
+

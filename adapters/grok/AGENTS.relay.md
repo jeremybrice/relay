@@ -1,7 +1,11 @@
 <!-- adapters/grok/AGENTS.relay.md -->
 ## Relay — session handoff (Grok Build)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
-first — they are the last agent's handoff. When wrapping up ("done for today" /
-"continue tomorrow"), run `/session-save` to persist a new handoff; offer it if unsure.
-At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
+if they exist — they are the last agent's handoff. If missing, continue.
+When the user signals the session is wrapping up ("done for today", "let's
+continue tomorrow", or a task completes and we're winding down), run the
+`session-save` skill to persist a Relay handoff. If unsure the session is ending,
+offer it in one line.
+At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
+If knowledge is over cap, offer the `relay-compact` skill in one line.
