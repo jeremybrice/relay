@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash .relay/adapters/grok/relay-session-start.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

@@ -9,7 +9,8 @@ emit_heredoc() { # varfunc, path
   local fn="$1" path="$2"
   printf '%s() { cat <<'"'"'RELAY_EOF'"'"'\n' "$fn"
   cat "$path"
-  printf '\nRELAY_EOF\n}\n\n'
+  [ -z "$(tail -c 1 "$path")" ] || printf '\n'   # keep the file's own trailing newline, add none
+  printf 'RELAY_EOF\n}\n\n'
 }
 
 {
@@ -26,6 +27,7 @@ emit_heredoc() { # varfunc, path
     rel="${f#./}"
     emit_heredoc "emit__$(echo "$rel" | tr './-' '___')" "$rel"
   done < <(cd . && find adapters -type f | sort)
+  emit_heredoc emit_smoke_compact tests/smoke-compact.sh
   # 2. the installer body (skips its own `emit_*`-only `--from` branch when bundled)
   cat install.sh
 } > "$OUT"

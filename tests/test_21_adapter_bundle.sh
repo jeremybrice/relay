@@ -4,7 +4,9 @@ cd "$(dirname "$0")"; . ./helper.sh
 SRC="$(cd .. && pwd)"
 
 # the new adapter files exist
-assert_file "$SRC/adapters/claude-code/commands/relay-learn.md"
+for s in session-save relay-learn relay-compact; do assert_file "$SRC/adapters/skills/$s/SKILL.md"; done
+assert_file "$SRC/adapters/opencode/commands/relay-compact.md"
+assert_file "$SRC/adapters/codex/skills/relay-compact/SKILL.md"
 assert_file "$SRC/adapters/codex/skills/relay-learn/SKILL.md"
 assert_file "$SRC/adapters/opencode/commands/relay-learn.md"
 assert_file "$SRC/adapters/opencode/commands/session-save.md"
@@ -15,8 +17,11 @@ assert_file "$SRC/adapters/opencode/instructions.relay.jsonc"
 ( cd "$SRC" && bash bundle.sh )
 assert_file "$SRC/dist/install.sh"
 TMP="$(mktemp -d)"; mkdir -p "$TMP/.claude"; ( cd "$TMP" && git init -q )
-( cd "$TMP" && bash "$SRC/dist/install.sh" )
-assert_file "$TMP/.claude/commands/relay-learn.md"
+( cd "$TMP" && bash "$SRC/dist/install.sh" --detect )
+assert_file "$TMP/.claude/skills/relay-learn/SKILL.md"
+assert_file "$TMP/.claude/skills/relay-compact/SKILL.md"
+assert_file "$TMP/.relay/tests/smoke-compact.sh"
+( cd "$TMP" && bash .relay/tests/smoke-compact.sh >/dev/null )
 assert_file "$TMP/.relay/relay.sh"
 
 # the wired tool can capture knowledge end to end
@@ -25,7 +30,7 @@ assert_file "$TMP/.session-log/knowledge/lessons/e2e.md"
 
 # bundle also offline-installs into a fresh opencode repo and wires /session-save
 TMP2="$(mktemp -d)"; mkdir -p "$TMP2/.opencode"; ( cd "$TMP2" && git init -q )
-( cd "$TMP2" && bash "$SRC/dist/install.sh" )
+( cd "$TMP2" && bash "$SRC/dist/install.sh" --detect )
 assert_file "$TMP2/.opencode/commands/session-save.md"
 assert_file "$TMP2/.opencode/commands/relay-learn.md"
 assert_file "$TMP2/.session-log/relay-instructions.md"
@@ -35,4 +40,4 @@ assert_file "$TMP2/.session-log/relay-instructions.md"
 ( cd "$TMP2" && .relay/relay.sh load --dir "$TMP2/.session-log" \
     > "$TMP2/.session-log/relay-instructions.md" )
 assert_contains "$(cat "$TMP2/.session-log/relay-instructions.md")" "opencode e2e ok"
-pass "adapter: /relay-learn wired + bundle offline install + opencode e2e"
+pass "adapter: skills wired + bundled smoke-compact passes + bundle offline install + opencode e2e"

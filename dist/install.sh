@@ -12,9 +12,12 @@ RELAY_FACTS_CAP="${RELAY_FACTS_CAP:-400}"
 RELAY_LESSONS_CAP="${RELAY_LESSONS_CAP:-400}"
 RELAY_FACT_STALE_DAYS="${RELAY_FACT_STALE_DAYS:-90}"
 RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
+RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
+RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
+RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
 }
 
 main() {
@@ -134,6 +137,7 @@ _load_knowledge() {
     out="${out}${block}"$'\n'
     [ "$exp" -gt 0 ] && out="${out}($exp fact(s) past freshness window — run: relay knowledge prune)"$'\n'
     [ "$conflicts" -gt 0 ] && out="${out}(⚠ $conflicts fact conflict(s) pending — run: relay knowledge resolve <id>)"$'\n'
+    [ "$total" -gt "$RELAY_FACTS_MAX" ] && out="${out}(⚠ $total facts over cap $RELAY_FACTS_MAX — run: relay knowledge compact)"$'\n'
   fi
   rm -f "$tmp"
 
@@ -153,6 +157,7 @@ _load_knowledge() {
     out="${out}## What this repo knows — lessons"$'\n'
     [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown — open .session-log/knowledge/lessons/"$'\n'
     out="${out}${block}"$'\n'
+    [ "$total" -gt "$RELAY_LESSONS_MAX" ] && out="${out}(⚠ $total lessons over cap $RELAY_LESSONS_MAX — run: relay knowledge compact)"$'\n'
   fi
   rm -f "$tmp"
 
@@ -201,6 +206,8 @@ cmd_load() {
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
+  elif [ "$format" = "grok" ]; then
+    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
     printf '%s\n' "$out"
   fi
@@ -469,6 +476,8 @@ cmd_knowledge() {
     ungraduate) k_ungraduate "$@";;
     supersede)  k_supersede "$@";;
     prune)      k_prune "$@";;
+    compact)    k_compact "$@";;
+    restore)    k_restore "$@";;
     why)        k_why "$@";;
     export)     k_export "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
@@ -490,6 +499,7 @@ k_add() {
   set -- ${rest[@]+"${rest[@]}"}
   local body="${1:-}"
   [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
+  [ -n "${body//[[:space:]]/}" ] || { echo "relay: knowledge add needs a non-empty body" >&2; return 2; }
   if [ "$near" = 1 ]; then _k_near "$kind" "$body"; return 0; fi
   [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
   id="$(_slugify "$id")"
@@ -559,6 +569,12 @@ k_list() {
       fi
     done
   fi
+  local cf=0 cl=0
+  cf="$(find "$kd/facts/cold" -name '*.md' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  cl="$(find "$kd/lessons/cold" -name '*.md' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  if [ "${cf:-0}" -gt 0 ] || [ "${cl:-0}" -gt 0 ]; then
+    echo "Cold: $cf facts, $cl lessons (restore via: relay knowledge restore <id>)"
+  fi
 }
 
 _block_remove() { # file id  (idempotent)
@@ -625,6 +641,95 @@ k_prune() {
   fi
 }
 
+_is_empty_body() { local b; b="$(_body "$1" | tr -d '[:space:]')"; [ -z "$b" ]; }
+
+_compact_move() { # apply file dest label reason  (moved=1 propagates via bash dynamic scoping)
+  if [ "$1" = 1 ]; then
+    mkdir -p "$(dirname "$3")"
+    mv "$2" "$(_uniq_dest "$3")"
+    printf 'compact: %s -> %s (%s)\n' "$4" "$(basename "$(dirname "$3")")" "$5"
+  else
+    printf 'would compact: %s -> %s (%s)\n' "$4" "$(basename "$(dirname "$3")")" "$5"
+  fi
+  moved=1
+}
+
+_compact_cap() { # apply kind max
+  local apply="$1" kind="$2" max="$3"
+  local kd="$DATA/knowledge" f id metric age tmp total excess
+  tmp="$(mktemp)"
+  for f in "$kd"/"$kind"/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"
+    if [ "$kind" = facts ]; then
+      metric="$(_fm "$f" confirmed)"; age="$(_days_since "$(_fm "$f" last_confirmed)")"
+    else
+      metric="$(_fm "$f" seen)"; age="$(_days_since "$(_fm "$f" last_seen)")"
+    fi
+    printf '%06d\t%06d\t%s\n' "${metric:-1}" "${age:-0}" "$id" >> "$tmp"
+  done
+  total="$(grep -c . "$tmp" || true)"
+  excess=$(( ${total:-0} - max ))
+  if [ "$excess" -gt 0 ]; then
+    # lowest metric first, then oldest (largest age); compact the bottom `excess`
+    while IFS=$'\t' read -r _m _a id; do
+      _compact_move "$apply" "$kd/$kind/$id.md" "$kd/$kind/cold/$id.md" "$kind/$id" "over cap ($total > $max)"
+    done < <(sort -t$'\t' -k1,1n -k2,2nr "$tmp" | head -n "$excess")
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+k_compact() {
+  local apply=0; [ "${1:-}" = "--yes" ] && apply=1
+  local kd="$DATA/knowledge" f id kind moved=0
+  [ -d "$kd" ] || { echo "(no knowledge yet)"; return 0; }
+  _lock || return 1
+  # 1. empty sweep -> superseded (empties are write bugs, not knowledge)
+  for kind in facts lessons; do
+    for f in "$kd"/"$kind"/*.md; do
+      [ -e "$f" ] || continue
+      _is_empty_body "$f" || continue
+      id="$(_fm "$f" id)"
+      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty body"
+    done
+  done
+  # 2. cold archive: unreinforced lessons older than RELAY_LESSON_COLD_DAYS
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    [ "$(_fm "$f" seen)" -le 1 ] 2>/dev/null || continue
+    [ "$(_days_since "$(_fm "$f" last_seen)")" -gt "$RELAY_LESSON_COLD_DAYS" ] || continue
+    id="$(_fm "$f" id)"
+    _compact_move "$apply" "$f" "$kd/lessons/cold/$id.md" "lessons/$id" "seen:1 older than ${RELAY_LESSON_COLD_DAYS}d"
+  done
+  # 3. caps (facts never leave except via caps here or prune; lessons via caps)
+  _compact_cap "$apply" facts "$RELAY_FACTS_MAX"
+  _compact_cap "$apply" lessons "$RELAY_LESSONS_MAX"
+  _kindex
+  _unlock
+  [ "$moved" = 0 ] && echo "(nothing to compact)"
+  return 0
+}
+
+k_restore() {
+  local id; id="$(_slugify "${1:-}")"
+  local kd="$DATA/knowledge" kind src
+  _lock || return 1
+  for kind in facts lessons; do
+    src="$kd/$kind/cold/$id.md"
+    if [ -f "$src" ]; then
+      mv "$src" "$(_uniq_dest "$kd/$kind/$id.md")"
+      _kindex
+      _unlock
+      echo "restored: $id ($kind)"
+      return 0
+    fi
+  done
+  _unlock
+  echo "relay: no cold entry: $id" >&2
+  return 1
+}
+
 k_why() {
   local id; id="$(_slugify "${1:-}")"
   local f="" k
@@ -648,17 +753,12 @@ k_export() {
 }
 
 main "$@"
-
 RELAY_EOF
 }
 
 emit_adapters() {
   mkdir -p ".relay/adapters/claude-code"
   emit__adapters_claude_code_CLAUDE_relay_md > ".relay/adapters/claude-code/CLAUDE.relay.md"
-  mkdir -p ".relay/adapters/claude-code/commands"
-  emit__adapters_claude_code_commands_relay_learn_md > ".relay/adapters/claude-code/commands/relay-learn.md"
-  mkdir -p ".relay/adapters/claude-code/commands"
-  emit__adapters_claude_code_commands_session_save_md > ".relay/adapters/claude-code/commands/session-save.md"
   mkdir -p ".relay/adapters/claude-code"
   emit__adapters_claude_code_relay_session_start_sh > ".relay/adapters/claude-code/relay-session-start.sh"
   mkdir -p ".relay/adapters/codex"
@@ -667,93 +767,48 @@ emit_adapters() {
   emit__adapters_codex_hooks_relay_toml > ".relay/adapters/codex/hooks.relay.toml"
   mkdir -p ".relay/adapters/codex"
   emit__adapters_codex_relay_session_start_sh > ".relay/adapters/codex/relay-session-start.sh"
+  mkdir -p ".relay/adapters/codex/skills/relay-compact"
+  emit__adapters_codex_skills_relay_compact_SKILL_md > ".relay/adapters/codex/skills/relay-compact/SKILL.md"
   mkdir -p ".relay/adapters/codex/skills/relay-learn"
   emit__adapters_codex_skills_relay_learn_SKILL_md > ".relay/adapters/codex/skills/relay-learn/SKILL.md"
   mkdir -p ".relay/adapters/codex/skills/session-save"
   emit__adapters_codex_skills_session_save_SKILL_md > ".relay/adapters/codex/skills/session-save/SKILL.md"
+  mkdir -p ".relay/adapters/cursor"
+  emit__adapters_cursor_AGENTS_relay_md > ".relay/adapters/cursor/AGENTS.relay.md"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_AGENTS_relay_md > ".relay/adapters/grok/AGENTS.relay.md"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_hooks_relay_json > ".relay/adapters/grok/hooks.relay.json"
+  mkdir -p ".relay/adapters/grok"
+  emit__adapters_grok_relay_session_start_sh > ".relay/adapters/grok/relay-session-start.sh"
   mkdir -p ".relay/adapters/opencode"
   emit__adapters_opencode_AGENTS_relay_md > ".relay/adapters/opencode/AGENTS.relay.md"
+  mkdir -p ".relay/adapters/opencode/commands"
+  emit__adapters_opencode_commands_relay_compact_md > ".relay/adapters/opencode/commands/relay-compact.md"
   mkdir -p ".relay/adapters/opencode/commands"
   emit__adapters_opencode_commands_relay_learn_md > ".relay/adapters/opencode/commands/relay-learn.md"
   mkdir -p ".relay/adapters/opencode/commands"
   emit__adapters_opencode_commands_session_save_md > ".relay/adapters/opencode/commands/session-save.md"
   mkdir -p ".relay/adapters/opencode"
   emit__adapters_opencode_instructions_relay_jsonc > ".relay/adapters/opencode/instructions.relay.jsonc"
+  mkdir -p ".relay/adapters/skills/relay-compact"
+  emit__adapters_skills_relay_compact_SKILL_md > ".relay/adapters/skills/relay-compact/SKILL.md"
+  mkdir -p ".relay/adapters/skills/relay-learn"
+  emit__adapters_skills_relay_learn_SKILL_md > ".relay/adapters/skills/relay-learn/SKILL.md"
+  mkdir -p ".relay/adapters/skills/session-save"
+  emit__adapters_skills_session_save_SKILL_md > ".relay/adapters/skills/session-save/SKILL.md"
 }
 
 emit__adapters_claude_code_CLAUDE_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/claude-code/CLAUDE.relay.md -->
-## Relay — session handoff (L2)
+## Relay — session handoff (Claude Code)
 When the user signals the session is wrapping up ("done for today", "let's
 continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
-
-RELAY_EOF
-}
-
-emit__adapters_claude_code_commands_relay_learn_md() { cat <<'RELAY_EOF'
-<!-- adapters/claude-code/commands/relay-learn.md -->
----
-description: Record a durable fact or lesson about this repo into Relay knowledge
----
-Capture a single durable piece of knowledge about THIS repo for future sessions.
-
-1. Decide the kind:
-   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
-   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
-2. For a fact, first check for an existing match so you reuse its id instead of
-   duplicating:
-
-   ```bash
-   "$CLAUDE_PROJECT_DIR/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
-     --dir "$CLAUDE_PROJECT_DIR/.session-log"
-   ```
-3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
-   `--ttl <days>` to a fact that is only true for a while (e.g. the current sprint);
-   omit it for durable truths:
-
-   ```bash
-   "$CLAUDE_PROJECT_DIR/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
-     --dir "$CLAUDE_PROJECT_DIR/.session-log"
-   # time-bound fact: "$CLAUDE_PROJECT_DIR/.relay/relay.sh" knowledge add --fact --id current-sprint --ttl 14 '...' --dir ...
-   # or a lesson:
-   "$CLAUDE_PROJECT_DIR/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
-     --dir "$CLAUDE_PROJECT_DIR/.session-log"
-   ```
-4. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>` — never graduate without the user's okay.
-
-RELAY_EOF
-}
-
-emit__adapters_claude_code_commands_session_save_md() { cat <<'RELAY_EOF'
-<!-- adapters/claude-code/commands/session-save.md -->
----
-description: Save a Relay handoff so the next session can pick up where you left off
----
-Persist a Relay handoff for the next agent.
-
-1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
-   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
-   files/paths and dated facts. Compose a one-line digest.
-2. Persist it. The script owns all file writes, rotation, and locking:
-
-   ```bash
-   printf '%s\n' '<<the six sections as markdown>>' \
-     | "$CLAUDE_PROJECT_DIR/.relay/relay.sh" save \
-         --dir "$CLAUDE_PROJECT_DIR/.session-log" \
-         --digest '<<one-line digest>>'
-   ```
-3. Reply: "Handoff saved for the next session."
-4. Then capture durable knowledge from this session (skip if none): for each
-   permanent repo truth run `knowledge add --fact --near` then `--fact --id <slug>`;
-   for each behavioral lesson run `knowledge add --lesson --id <slug>`. Use
-   `"$CLAUDE_PROJECT_DIR/.relay/relay.sh"` and `--dir "$CLAUDE_PROJECT_DIR/.session-log"`.
-   If the tool says a lesson is graduation-ready, offer graduation in one line.
-
+If knowledge is over cap, offer `/relay-compact` in one line — never run it unasked.
 RELAY_EOF
 }
 
@@ -765,19 +820,17 @@ ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
 "$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" 2>/dev/null || true
 exit 0
-
 RELAY_EOF
 }
 
 emit__adapters_codex_AGENTS_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/codex/AGENTS.relay.md -->
-## Relay — session handoff (L2 + load fallback)
+## Relay — session handoff (Codex)
 At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
 first — they are the last agent's handoff. When wrapping up ("done for today" /
 "continue tomorrow"), run `$session-save` to persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
-
 RELAY_EOF
 }
 
@@ -785,7 +838,6 @@ emit__adapters_codex_hooks_relay_toml() { cat <<'RELAY_EOF'
 # adapters/codex/hooks.relay.toml — merge into .codex/config.toml
 [[hooks.SessionStart]]
 command = [".relay/adapters/codex/relay-session-start.sh"]
-
 RELAY_EOF
 }
 
@@ -797,7 +849,49 @@ ROOT="${CODEX_PROJECT_DIR:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
 "$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex 2>/dev/null || true
 exit 0
+RELAY_EOF
+}
 
+emit__adapters_codex_skills_relay_compact_SKILL_md() { cat <<'RELAY_EOF'
+<!-- adapters/codex/skills/relay-compact/SKILL.md -->
+---
+name: relay-compact
+description: Consolidate Relay knowledge — sweep empties, archive stale, merge duplicates (human-gated)
+---
+Run the Relay knowledge consolidation cycle. Mechanical fixes first, then a
+human-gated semantic pass. Use `"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
+as `R` and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
+
+1. Mechanical pass. Show each dry run to the user, then apply:
+   `R knowledge compact D` (dry run — show the user), then
+   `R knowledge compact --yes D`; then `R knowledge prune D` (dry run — show
+   the user), then `R knowledge prune --yes D`.
+2. Read the full surviving corpus: `R knowledge export D`.
+3. Build a consolidation plan:
+   - Merge groups: duplicate/overlapping entries → one entry per group. Keep
+     the most descriptive existing slug, rewrite the body to capture the
+     union, name the absorbed ids.
+   - Rewrites: bodies stale against the current codebase → corrected body.
+     VERIFY against the repo before declaring anything stale — never from
+     memory alone.
+   - Graduations: lessons with sessions >= 3 that are durable repo rules →
+     propose `knowledge graduate <id>`.
+   - Deletions: entries that no longer reflect the codebase with no merge
+     target → propose `knowledge supersede <id>`.
+4. Present the plan to the user. Apply NOTHING until approved. Graduations
+   additionally need per-item user OK.
+5. Apply only through existing primitives:
+   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+     (reinforces the kept id, preserving its first_seen provenance)
+   - absorbed/deleted ids: `R knowledge supersede <id> D`
+   - approved graduations: `R knowledge graduate <id> D`
+6. Report final counts: `R knowledge list D`. (The session-start hook picks up
+   the compacted store next session — no snapshot refresh needed.)
+
+Invariants:
+- Never invent knowledge — merges only reword existing bodies.
+- Never merge across kinds (facts = durable truths; lessons = behavioral patterns).
+- Prefer reinforcing the oldest entry in a merge group (keeps first_seen).
 RELAY_EOF
 }
 
@@ -826,7 +920,6 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
      --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
    ```
 4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>` — only with the user's okay.
-
 RELAY_EOF
 }
 
@@ -853,13 +946,72 @@ Persist a Relay handoff for the next agent.
    `knowledge add --fact --near` then `--fact --id <slug>`; lessons via
    `knowledge add --lesson --id <slug>`, using `"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
    and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"`. Offer graduation only when prompted and approved.
+If `knowledge list` reports counts over cap (or the session-start load warned
+"(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run it
+unasked.
+RELAY_EOF
+}
 
+emit__adapters_cursor_AGENTS_relay_md() { cat <<'RELAY_EOF'
+<!-- adapters/cursor/AGENTS.relay.md -->
+## Relay — session handoff (Cursor)
+At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
+if they exist — they are the last agent's handoff. If missing, continue.
+When the user signals the session is wrapping up ("done for today", "let's
+continue tomorrow", or a task completes and we're winding down), run the
+`session-save` skill to persist a Relay handoff. If unsure the session is ending,
+offer it in one line.
+At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
+`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+If knowledge is over cap, offer the `relay-compact` skill in one line.
+RELAY_EOF
+}
+
+emit__adapters_grok_AGENTS_relay_md() { cat <<'RELAY_EOF'
+<!-- adapters/grok/AGENTS.relay.md -->
+## Relay — session handoff (Grok Build)
+At the START of a session, read `.session-log/latest.md` and `.session-log/index.md`
+if they exist — they are the last agent's handoff. If missing, continue.
+When the user signals the session is wrapping up ("done for today", "let's
+continue tomorrow", or a task completes and we're winding down), run the
+`session-save` skill to persist a Relay handoff. If unsure the session is ending,
+offer it in one line.
+At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
+`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+If knowledge is over cap, offer the `relay-compact` skill in one line.
+RELAY_EOF
+}
+
+emit__adapters_grok_hooks_relay_json() { cat <<'RELAY_EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash .relay/adapters/grok/relay-session-start.sh", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
+RELAY_EOF
+}
+
+emit__adapters_grok_relay_session_start_sh() { cat <<'RELAY_EOF'
+#!/usr/bin/env bash
+# Grok SessionStart hook → emits {"systemMessage":<handoff>} JSON (Grok reads only
+# a top-level systemMessage from observe-only events). AGENTS.md is the fallback.
+set -euo pipefail
+ROOT="${GROK_WORKSPACE_ROOT:-$PWD}"
+[ -x "$ROOT/.relay/relay.sh" ] || exit 0
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok 2>/dev/null || true
+exit 0
 RELAY_EOF
 }
 
 emit__adapters_opencode_AGENTS_relay_md() { cat <<'RELAY_EOF'
 <!-- adapters/opencode/AGENTS.relay.md -->
-## Relay — session handoff (L2)
+## Relay — session handoff (OpenCode)
 At the START of a session, the last handoff + active knowledge load automatically
 via the `instructions` entry in `opencode.json` (from
 `.session-log/relay-instructions.md`). If that file is missing or empty, fall back
@@ -870,7 +1022,56 @@ continue tomorrow", or a task completes and we're winding down), run
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
 `knowledge add`), and surface any graduation-ready lesson for the user to approve.
+RELAY_EOF
+}
 
+emit__adapters_opencode_commands_relay_compact_md() { cat <<'RELAY_EOF'
+<!-- adapters/opencode/commands/relay-compact.md -->
+---
+description: Consolidate Relay knowledge — sweep empties, archive stale, merge duplicates (human-gated)
+---
+Run the Relay knowledge consolidation cycle. Mechanical fixes first, then a
+human-gated semantic pass. Use `"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
+as `R` and `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
+
+1. Mechanical pass. Show each dry run to the user, then apply:
+
+   ```bash
+   R knowledge compact D          # dry run — show the user
+   R knowledge compact --yes D
+   R knowledge prune D            # dry run — show the user
+   R knowledge prune --yes D
+   ```
+2. Read the full surviving corpus: `R knowledge export D`.
+3. Build a consolidation plan:
+   - Merge groups: duplicate/overlapping entries → one entry per group. Keep
+     the most descriptive existing slug, rewrite the body to capture the
+     union, name the absorbed ids.
+   - Rewrites: bodies stale against the current codebase → corrected body.
+     VERIFY against the repo before declaring anything stale — never from
+     memory alone.
+   - Graduations: lessons with sessions >= 3 that are durable repo rules →
+     propose `knowledge graduate <id>`.
+   - Deletions: entries that no longer reflect the codebase with no merge
+     target → propose `knowledge supersede <id>`.
+4. Present the plan to the user. Apply NOTHING until approved. Graduations
+   additionally need per-item user OK.
+5. Apply only through existing primitives:
+   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+     (reinforces the kept id, preserving its first_seen provenance)
+   - absorbed/deleted ids: `R knowledge supersede <id> D`
+   - approved graduations: `R knowledge graduate <id> D`
+6. Refresh the snapshot opencode auto-loads next session:
+
+   ```bash
+   R load D > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
+   ```
+7. Report final counts: `R knowledge list D`.
+
+Invariants:
+- Never invent knowledge — merges only reword existing bodies.
+- Never merge across kinds (facts = durable truths; lessons = behavioral patterns).
+- Prefer reinforcing the oldest entry in a merge group (keeps first_seen).
 RELAY_EOF
 }
 
@@ -912,7 +1113,6 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
    ```
 5. If the tool reports a lesson is graduation-ready, offer (one line) to run
    `knowledge graduate <slug>` — never graduate without the user's okay.
-
 RELAY_EOF
 }
 
@@ -950,7 +1150,9 @@ Persist a Relay handoff for the next agent.
    `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"`. Re-run the step-4 load
    after the knowledge writes so the snapshot stays current. If the tool says a
    lesson is graduation-ready, offer graduation in one line.
-
+6. If `knowledge list` reports counts over cap (or step 4's load warned
+   "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run
+   it unasked.
 RELAY_EOF
 }
 
@@ -965,26 +1167,247 @@ emit__adapters_opencode_instructions_relay_jsonc() { cat <<'RELAY_EOF'
   "$schema": "https://opencode.ai/config.json",
   "instructions": [".session-log/relay-instructions.md"]
 }
+RELAY_EOF
+}
 
+emit__adapters_skills_relay_compact_SKILL_md() { cat <<'RELAY_EOF'
+---
+name: relay-compact
+description: Consolidate Relay knowledge — sweep empties, archive stale, merge duplicates (human-gated)
+---
+
+Run the Relay knowledge consolidation cycle. Mechanical fixes first, then a
+human-gated semantic pass. Use `"$PWD/.relay/relay.sh"` as `R` and
+`--dir "$PWD/.session-log"` as `D` below.
+
+1. Mechanical pass. Show each dry run to the user, then apply:
+
+   ```bash
+   R knowledge compact D
+   R knowledge compact --yes D
+   R knowledge prune D
+   R knowledge prune --yes D
+   ```
+
+2. Read the full surviving corpus: `R knowledge export D`.
+3. Build a consolidation plan:
+   - Merge groups: duplicate/overlapping entries → one entry per group. Keep
+     the most descriptive existing slug, rewrite the body to capture the union,
+     name the absorbed ids.
+   - Rewrites: bodies stale against the current codebase → corrected body.
+     VERIFY against the repo before declaring anything stale — never from
+     memory alone.
+   - Graduations: lessons with sessions >= 3 that are durable repo rules →
+     propose `knowledge graduate <id>`.
+   - Deletions: entries that no longer reflect the codebase with no merge
+     target → propose `knowledge supersede <id>`.
+4. Present the plan to the user. Apply NOTHING until approved. Graduations
+   additionally need per-item user OK.
+5. Apply only through existing primitives:
+   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+   - absorbed/deleted ids: `R knowledge supersede <id> D`
+   - approved graduations: `R knowledge graduate <id> D`
+6. Report final counts: `R knowledge list D`. The next session picks up the
+   compacted store when it reads `.session-log/`. No snapshot refresh.
+
+Invariants:
+- Never invent knowledge — merges only reword existing bodies.
+- Never merge across kinds (facts = durable truths; lessons = behavioral patterns).
+- Prefer reinforcing the oldest entry in a merge group (keeps first_seen).
+RELAY_EOF
+}
+
+emit__adapters_skills_relay_learn_SKILL_md() { cat <<'RELAY_EOF'
+---
+name: relay-learn
+description: Record a durable fact or lesson about this repo into Relay knowledge
+---
+
+Capture a single durable piece of knowledge about THIS repo for future sessions.
+
+1. Decide the kind:
+   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
+   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
+2. For a fact, first check for an existing match so you reuse its id instead of
+   duplicating:
+
+   ```bash
+   "$PWD/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
+     --dir "$PWD/.session-log"
+   ```
+
+3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
+   `--ttl <days>` to a fact that is only true for a while; omit it for durable
+   truths:
+
+   ```bash
+   "$PWD/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
+     --dir "$PWD/.session-log"
+   "$PWD/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
+     --dir "$PWD/.session-log"
+   ```
+
+4. If the tool reports a lesson is graduation-ready, offer (one line) to run
+   `knowledge graduate <slug>` — never graduate without the user's okay.
+
+Do not write `.session-log/relay-instructions.md`. Session start reads
+`.session-log/latest.md` and `.session-log/index.md` only.
+RELAY_EOF
+}
+
+emit__adapters_skills_session_save_SKILL_md() { cat <<'RELAY_EOF'
+---
+name: session-save
+description: Save a Relay handoff so the next session can pick up where you left off
+---
+
+Persist a Relay handoff for the next agent.
+
+1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
+   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
+   files/paths and dated facts. Compose a one-line digest.
+2. Persist it. The script owns all file writes, rotation, and locking:
+
+   ```bash
+   printf '%s\n' '<<the six sections as markdown>>' \
+     | "$PWD/.relay/relay.sh" save \
+         --dir "$PWD/.session-log" \
+         --digest '<<one-line digest>>'
+   ```
+
+3. Reply: "Handoff saved for the next session."
+4. Then capture durable knowledge from this session (skip if none) using the
+   `relay-learn` skill, or call `"$PWD/.relay/relay.sh"` `knowledge add` with
+   `--dir "$PWD/.session-log"`. If the tool says a lesson is graduation-ready,
+   offer graduation in one line. Never graduate without the user's okay.
+5. If `knowledge list` reports counts over cap (or a load warned
+   "(⚠ N ... over cap ...)"), offer `relay-compact` in one line.
+   Never run it unasked.
+
+Do not write `.session-log/relay-instructions.md`. Session start reads
+`.session-log/latest.md` and `.session-log/index.md` only.
+RELAY_EOF
+}
+
+emit_smoke_compact() { cat <<'RELAY_EOF'
+#!/usr/bin/env bash
+# smoke-compact.sh — contract test for relay knowledge compact/restore/empty-body guard.
+# Runs against a throwaway --dir fixture; never touches the real .session-log.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+RELAY="$HERE/../relay.sh"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+DATA="$TMP/.session-log"
+mkdir -p "$DATA/knowledge/facts" "$DATA/knowledge/lessons"
+fails=0
+t() { # label expected actual
+  if [ "$2" = "$3" ]; then printf 'ok   - %s\n' "$1"; else printf 'FAIL - %s (want %s got %s)\n' "$1" "$2" "$3"; fails=$((fails+1)); fi
+}
+
+old="2000-01-01"
+today="$(date +%F)"
+
+lesson() { # file id seen last [body]
+  printf -- '---\nid: %s\nkind: lesson\nseen: %s\nsessions: 1\nfirst_seen: %s\nlast_seen: %s\nsource: test\nstatus: active\ngraduated_to: null\n---\n%s\n' \
+    "$2" "$3" "$4" "$4" "${5:-}" > "$1"
+}
+fact() { # file id confirmed last [body]
+  printf -- '---\nid: %s\nkind: fact\nconfirmed: %s\nfirst_seen: %s\nlast_confirmed: %s\nttl: none\nsource: test\nstatus: active\n---\n%s\n' \
+    "$2" "$3" "$4" "$4" "${5:-}" > "$1"
+}
+
+# --- fixture ---
+lesson "$DATA/knowledge/lessons/empty-lesson.md"    empty-lesson   1 "$today" ""
+fact   "$DATA/knowledge/facts/empty-fact.md"        empty-fact     1 "$today" ""
+lesson "$DATA/knowledge/lessons/stale-seen1.md"     stale-seen1    1 "$old"    "body for stale-seen1"
+lesson "$DATA/knowledge/lessons/fresh-seen1.md"     fresh-seen1    1 "$today"  "body for fresh-seen1"
+lesson "$DATA/knowledge/lessons/old-reinforced.md"  old-reinforced 3 "$old"    "body for old-reinforced"
+fact   "$DATA/knowledge/facts/keep-fact.md"         keep-fact      2 "$old"    "body for keep-fact"
+# load only emits when a handoff exists (cmd_load early-returns without latest.md)
+printf -- '---\ndate: %s\nsession: 1\ndigest: "fixture"\n---\nfixture handoff body\n' "$today" > "$DATA/latest.md"
+
+# 1. empty-body add is rejected and writes nothing
+if "$RELAY" knowledge add --lesson --id should-not-exist --dir "$DATA" >/dev/null 2>&1; then
+  t "empty-body add rejected" "nonzero" "zero"
+else
+  t "empty-body add rejected" "nonzero" "nonzero"
+fi
+[ ! -f "$DATA/knowledge/lessons/should-not-exist.md" ] && r="absent" || r="present"
+t "empty-body add wrote nothing" "absent" "$r"
+
+# 2. compact dry run reports and changes nothing
+out="$("$RELAY" knowledge compact --dir "$DATA" 2>/dev/null)" || true
+echo "$out" | grep -q "would compact: lessons/empty-lesson" && r=yes || r=no; t "dry run flags empty lesson" yes "$r"
+echo "$out" | grep -q "would compact: lessons/stale-seen1" && r=yes || r=no; t "dry run flags stale seen:1 lesson" yes "$r"
+[ -f "$DATA/knowledge/lessons/empty-lesson.md" ] && r=yes || r=no; t "dry run changes nothing" yes "$r"
+
+# 3. compact --yes moves entries to the right destinations
+"$RELAY" knowledge compact --yes --dir "$DATA" >/dev/null 2>&1 || true
+[ -f "$DATA/knowledge/lessons/superseded/empty-lesson.md" ] && r=yes || r=no; t "empty lesson -> superseded" yes "$r"
+[ -f "$DATA/knowledge/facts/superseded/empty-fact.md" ] && r=yes || r=no; t "empty fact -> superseded" yes "$r"
+[ -f "$DATA/knowledge/lessons/cold/stale-seen1.md" ] && r=yes || r=no; t "stale seen:1 lesson -> cold" yes "$r"
+[ -f "$DATA/knowledge/lessons/fresh-seen1.md" ] && r=yes || r=no; t "fresh seen:1 lesson kept" yes "$r"
+[ -f "$DATA/knowledge/lessons/old-reinforced.md" ] && r=yes || r=no; t "old reinforced lesson kept" yes "$r"
+[ -f "$DATA/knowledge/facts/keep-fact.md" ] && r=yes || r=no; t "old fact kept (prune owns fact staleness)" yes "$r"
+grep -q stale-seen1 "$DATA/knowledge/index.md" && r=no || r=yes; t "index excludes compacted entries" yes "$r"
+
+# 4. caps: RELAY_LESSONS_MAX=2 with 3 active lessons -> lowest-ranked goes cold
+lesson "$DATA/knowledge/lessons/cap-victim.md" cap-victim 1 "$today" "body for cap-victim"
+RELAY_LESSONS_MAX=2 "$RELAY" knowledge compact --yes --dir "$DATA" >/dev/null 2>&1 || true
+n="$(ls -1 "$DATA/knowledge/lessons"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+t "cap trims active lessons to RELAY_LESSONS_MAX" "2" "$n"
+[ -f "$DATA/knowledge/lessons/old-reinforced.md" ] && r=yes || r=no; t "cap keeps highest-seen entry" yes "$r"
+[ -f "$DATA/knowledge/lessons/cold/cap-victim.md" ] && r=yes || r=no; t "cap colds lowest-ranked entry" yes "$r"
+
+# 5. restore returns a cold entry to active
+"$RELAY" knowledge restore stale-seen1 --dir "$DATA" >/dev/null 2>&1 || true
+[ -f "$DATA/knowledge/lessons/stale-seen1.md" ] && r=yes || r=no; t "restore returns cold entry" yes "$r"
+
+# 6. loader output includes restored entries and excludes cold/superseded ones
+out="$("$RELAY" load --dir "$DATA" 2>/dev/null)" || true
+echo "$out" | grep -q "body for stale-seen1" && r=yes || r=no; t "loader shows restored entry" yes "$r"
+echo "$out" | grep -q "body for cap-victim" && r=yes || r=no; t "loader hides cold entry" no "$r"
+
+# 7. over-cap nudge appears in load output
+out="$(RELAY_LESSONS_MAX=1 "$RELAY" load --dir "$DATA" 2>/dev/null)" || true
+echo "$out" | grep -q "over cap" && r=yes || r=no; t "load nudges when over cap" yes "$r"
+
+if [ "$fails" -gt 0 ]; then echo "SMOKE FAIL ($fails)"; exit 1; fi
+echo "SMOKE OK"
 RELAY_EOF
 }
 
 #!/usr/bin/env bash
 # install.sh — lay Relay into the current repo. (Bundled release embeds sources; --from uses a source tree.)
+# usage: install.sh [--clis claude,codex,opencode,cursor,grok] [--detect] [--from SRC]
+#   no flags + a terminal → asks which CLIs to wire (detected ones pre-checked)
+#   --clis              → wire exactly these, no prompt
+#   --detect / no tty   → wire whatever CLIs are already present in the repo
 set -euo pipefail
 MARK="# >>> relay >>>"
-FROM=""; [ "${1:-}" = "--from" ] && FROM="$2"
+FROM="" CLIS="" DETECT=0
+ALL_CLIS="claude codex opencode cursor grok"
+
+usage() {
+  echo "usage: install.sh [--clis claude,codex,opencode,cursor,grok] [--detect] [--from SRC]" >&2
+}
 
 copy_tool() {
   mkdir -p .relay
   if [ -n "$FROM" ]; then
     cp "$FROM/relay.sh" .relay/relay.sh
+    rm -rf .relay/adapters                 # tool-owned; replace so re-runs don't nest adapters/adapters
     cp -R "$FROM/adapters" .relay/adapters
+    mkdir -p .relay/tests
+    cp "$FROM/tests/smoke-compact.sh" .relay/tests/smoke-compact.sh
   else
     emit_relay > .relay/relay.sh        # emit_* funcs exist only in the bundled install.sh (Task 10)
+    rm -rf .relay/adapters
     emit_adapters
+    mkdir -p .relay/tests
+    emit_smoke_compact > .relay/tests/smoke-compact.sh
   fi
-  chmod +x .relay/relay.sh
+  chmod +x .relay/relay.sh .relay/tests/smoke-compact.sh
   find .relay/adapters -name '*.sh' -exec chmod +x {} \; 2>/dev/null || true
   mkdir -p .session-log/history
 }
@@ -998,13 +1421,51 @@ append_block() { # file, source-block
   local file="$1" src="$2"
   [ -f "$src" ] || return 0
   touch "$file"
-  grep -qF "$MARK" "$file" 2>/dev/null && return 0
+  # idempotent per adapter: each source's first line is its own header comment.
+  # Already present → replace that block in place so re-installs pick up new wording.
+  if grep -qF "$(head -n 1 "$src")" "$file" 2>/dev/null; then
+    awk -v mark="$MARK" -v endm="# <<< relay <<<" -v hdr="$(head -n 1 "$src")" -v src="$src" '
+      $0 == mark { inblk = 1; buf = $0 "\n"; next }
+      inblk {
+        buf = buf $0 "\n"
+        if ($0 == endm) {
+          inblk = 0
+          if (index(buf, hdr)) {
+            print mark
+            while ((getline line < src) > 0) print line
+            close(src)
+            print endm
+          } else printf "%s", buf
+        }
+        next
+      }
+      { print }
+      END { if (inblk) printf "%s", buf }
+    ' "$file" > "$file.relaytmp" && mv "$file.relaytmp" "$file"
+    return 0
+  fi
   { printf '\n%s\n' "$MARK"; cat "$src"; printf '%s\n' "# <<< relay <<<"; } >> "$file"
 }
 
+copy_skills() { # dest skills dir — the shared session-save / relay-learn / relay-compact skills
+  local dest="$1" d
+  mkdir -p "$dest"
+  for d in .relay/adapters/skills/*/; do
+    d="${d%/}"; rm -rf "$dest/${d##*/}"; cp -R "$d" "$dest/${d##*/}"
+  done
+}
+
+drop_legacy_commands() { # dir prefix — remove Relay-owned command files from older installs
+  local f
+  for f in "$1"/session-save.md "$1"/relay-learn.md "$1"/relay-compact.md; do
+    [ -f "$f" ] && grep -qF "<!-- adapters/$2/commands/" "$f" && rm -f "$f"
+  done
+  return 0
+}
+
 wire_cc() {
-  mkdir -p .claude/commands
-  [ -d .relay/adapters/claude-code/commands ] && cp .relay/adapters/claude-code/commands/*.md .claude/commands/ 2>/dev/null || true
+  copy_skills .claude/skills
+  drop_legacy_commands .claude/commands claude-code
   append_block CLAUDE.md .relay/adapters/claude-code/CLAUDE.relay.md
   local hook=".relay/adapters/claude-code/relay-session-start.sh"
   local sj=".claude/settings.json"
@@ -1047,9 +1508,9 @@ wire_opencode() {
   # context at every session start. We point it at a snapshot file that
   # /session-save and /relay-learn refresh after every write.
   local cfg="" entry=".session-log/relay-instructions.md"
-  for f in opencode.jsonc opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
+  for f in opencode.jsonc opencode.json .opencode/opencode.jsonc .opencode/opencode.json; do [ -f "$f" ] && { cfg="$f"; break; }; done
   [ -n "$cfg" ] || cfg="opencode.json"
-  touch "$cfg"
+  [ -s "$cfg" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$cfg"
   grep -qF "$entry" "$cfg" 2>/dev/null && return 0    # idempotent
   if command -v jq >/dev/null 2>&1; then
     jq --arg p "$entry" '.instructions = ((.instructions // []) + [$p])' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
@@ -1075,16 +1536,130 @@ PY
   [ -f "$entry" ] || printf '# Relay handoff will appear here after the first /session-save\n' > "$entry"
 }
 
+wire_cursor() {
+  copy_skills .cursor/skills
+  append_block AGENTS.md .relay/adapters/cursor/AGENTS.relay.md
+}
+
+wire_grok() {
+  copy_skills .grok/skills
+  drop_legacy_commands .grok/commands grok
+  mkdir -p .grok/hooks
+  append_block AGENTS.md .relay/adapters/grok/AGENTS.relay.md
+  # Grok reads project hooks from .grok/hooks/*.json (after /hooks-trust)
+  [ -f .grok/hooks/relay.json ] || cp .relay/adapters/grok/hooks.relay.json .grok/hooks/relay.json
+}
+
+cli_label() {
+  case "$1" in
+    claude) echo "Claude Code";; codex) echo "Codex";;
+    opencode) echo "OpenCode";; cursor) echo "Cursor";; grok) echo "Grok Build";;
+  esac
+}
+
+detect_clis() {
+  local found=""
+  [ -d .claude ] && found="$found claude"
+  [ -d .codex ]  && found="$found codex"
+  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && found="$found opencode"
+  [ -d .cursor ] && found="$found cursor"
+  [ -d .grok ]   && found="$found grok"
+  echo "${found# }"
+}
+
+normalize_clis() { # comma/space list with aliases → canonical space list, in ALL_CLIS order
+  local raw out="" c
+  raw=" $(printf '%s' "$1" | tr ',[:upper:]' ' [:lower:]') "
+  raw="$(printf '%s' "$raw" | sed -e 's/ claude-code / claude /g; s/ cc / claude /g; s/ open-code / opencode /g; s/ grok-build / grok /g; s/ cursor-agent / cursor /g')"
+  for c in $raw; do
+    case " $ALL_CLIS all " in *" $c "*) ;; *) echo "relay: unknown CLI '$c' (choose from: $ALL_CLIS)" >&2; return 2;; esac
+  done
+  for c in $ALL_CLIS; do
+    case "$raw" in *" $c "*|*" all "*) out="$out $c";; esac
+  done
+  echo "${out# }"
+}
+
+prompt_clis() { # $1 = tty to read from; $2 = pre-selected list
+  local tty="$1" sel=" $2 " c i m ans n
+  exec 3<"$tty"                            # open once so each read advances
+  while :; do
+    {
+      echo ""
+      echo "Which CLIs should Relay be wired for in this repo?"
+      i=1
+      for c in $ALL_CLIS; do
+        case "$sel" in *" $c "*) m="x";; *) m=" ";; esac
+        printf '  %d) [%s] %s\n' "$i" "$m" "$(cli_label "$c")"
+        i=$((i + 1))
+      done
+      printf 'Toggle by number (e.g. "1 4"), "a" = all, "n" = none, Enter = done: '
+    } >&2
+    IFS= read -r ans <&3 || ans=""
+    [ -z "$ans" ] && break
+    for n in $(printf '%s' "$ans" | tr ',' ' '); do
+      case "$n" in
+        a|A) sel=" $ALL_CLIS ";;
+        n|N) sel=" ";;
+        [1-5]) c="$(echo $ALL_CLIS | cut -d' ' -f"$n")"
+               case "$sel" in *" $c "*) sel="$(printf '%s' "$sel" | sed "s/ $c / /")";; *) sel="$sel$c ";; esac;;
+        *) echo "relay: ignoring '$n'" >&2;;
+      esac
+    done
+  done
+  exec 3<&-
+  normalize_clis "$sel"
+}
+
 main() {
-  local did=0
-  [ -d .claude ]   && { copy_tool; wire_cc; did=1; }
-  [ -d .codex ]    && { copy_tool; wire_codex; did=1; }
-  { [ -d .opencode ] || [ -f opencode.json ] || [ -f opencode.jsonc ]; } && { copy_tool; wire_opencode; did=1; }
-  if [ "$did" = 0 ]; then
-    echo "relay: no .claude/, .codex/, or .opencode/ detected — nothing to wire. Re-run inside a Claude Code, Codex, or opencode repo." >&2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from)   [ $# -ge 2 ] || { usage; exit 2; }; FROM="$2"; shift 2;;
+      --clis)   [ $# -ge 2 ] || { usage; exit 2; }; CLIS="$2"; shift 2;;
+      --clis=*) CLIS="${1#--clis=}"; shift;;
+      --detect) DETECT=1; shift;;
+      -h|--help) usage; exit 0;;
+      *) echo "relay: unknown option '$1'" >&2; usage; exit 2;;
+    esac
+  done
+
+  # run from a source checkout (no embedded emit_* funcs) → use the checkout itself
+  if [ -z "$FROM" ] && ! command -v emit_relay >/dev/null 2>&1; then
+    FROM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  fi
+
+  local selected detected
+  detected="$(detect_clis)"
+  if [ -n "$CLIS" ]; then
+    selected="$(normalize_clis "$CLIS")" || exit 2
+  elif [ "$DETECT" = 1 ]; then
+    selected="$detected"
+  elif [ -n "${RELAY_TTY:-}" ]; then        # test hook: answers come from a file
+    selected="$(prompt_clis "$RELAY_TTY" "$detected")"
+  elif [ -t 0 ]; then
+    selected="$(prompt_clis /dev/stdin "$detected")"
+  elif { : </dev/tty; } 2>/dev/null; then    # piped install (curl | bash) still has a terminal
+    selected="$(prompt_clis /dev/tty "$detected")"
+  else
+    selected="$detected"
+  fi
+
+  if [ -z "$selected" ]; then
+    echo "relay: no CLIs selected or detected — nothing to wire. Re-run with --clis claude,codex,opencode,cursor,grok." >&2
     exit 0
   fi
+
+  copy_tool
+  local c
+  for c in $selected; do
+    case "$c" in
+      claude) wire_cc;; codex) wire_codex;; opencode) wire_opencode;; cursor) wire_cursor;; grok) wire_grok;;
+    esac
+  done
   gitignore_data
-  echo "relay: installed. Handoffs will accumulate in .session-log/ (gitignored)."
+  local labels=""
+  for c in $selected; do labels="$labels, $(cli_label "$c")"; done
+  echo "relay: installed for ${labels#, }. Handoffs will accumulate in .session-log/ (gitignored)."
+  case " $selected " in *" grok "*) echo "relay: in Grok, run /hooks-trust once so the SessionStart hook can load the handoff.";; esac
 }
 main "$@"

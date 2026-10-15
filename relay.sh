@@ -11,9 +11,12 @@ RELAY_FACTS_CAP="${RELAY_FACTS_CAP:-400}"
 RELAY_LESSONS_CAP="${RELAY_LESSONS_CAP:-400}"
 RELAY_FACT_STALE_DAYS="${RELAY_FACT_STALE_DAYS:-90}"
 RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
+RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
+RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
+RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
 }
 
 main() {
@@ -133,6 +136,7 @@ _load_knowledge() {
     out="${out}${block}"$'\n'
     [ "$exp" -gt 0 ] && out="${out}($exp fact(s) past freshness window — run: relay knowledge prune)"$'\n'
     [ "$conflicts" -gt 0 ] && out="${out}(⚠ $conflicts fact conflict(s) pending — run: relay knowledge resolve <id>)"$'\n'
+    [ "$total" -gt "$RELAY_FACTS_MAX" ] && out="${out}(⚠ $total facts over cap $RELAY_FACTS_MAX — run: relay knowledge compact)"$'\n'
   fi
   rm -f "$tmp"
 
@@ -152,6 +156,7 @@ _load_knowledge() {
     out="${out}## What this repo knows — lessons"$'\n'
     [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown — open .session-log/knowledge/lessons/"$'\n'
     out="${out}${block}"$'\n'
+    [ "$total" -gt "$RELAY_LESSONS_MAX" ] && out="${out}(⚠ $total lessons over cap $RELAY_LESSONS_MAX — run: relay knowledge compact)"$'\n'
   fi
   rm -f "$tmp"
 
@@ -200,6 +205,8 @@ cmd_load() {
   if [ "$format" = "codex" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
+  elif [ "$format" = "grok" ]; then
+    printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
     printf '%s\n' "$out"
   fi
@@ -468,6 +475,8 @@ cmd_knowledge() {
     ungraduate) k_ungraduate "$@";;
     supersede)  k_supersede "$@";;
     prune)      k_prune "$@";;
+    compact)    k_compact "$@";;
+    restore)    k_restore "$@";;
     why)        k_why "$@";;
     export)     k_export "$@";;
     *) echo "relay: unknown knowledge subcommand: ${sub:-(none)}" >&2; return 2;;
@@ -489,6 +498,7 @@ k_add() {
   set -- ${rest[@]+"${rest[@]}"}
   local body="${1:-}"
   [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
+  [ -n "${body//[[:space:]]/}" ] || { echo "relay: knowledge add needs a non-empty body" >&2; return 2; }
   if [ "$near" = 1 ]; then _k_near "$kind" "$body"; return 0; fi
   [ -n "$id" ] || { echo "relay: knowledge add needs --id <slug>" >&2; return 2; }
   id="$(_slugify "$id")"
@@ -558,6 +568,12 @@ k_list() {
       fi
     done
   fi
+  local cf=0 cl=0
+  cf="$(find "$kd/facts/cold" -name '*.md' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  cl="$(find "$kd/lessons/cold" -name '*.md' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  if [ "${cf:-0}" -gt 0 ] || [ "${cl:-0}" -gt 0 ]; then
+    echo "Cold: $cf facts, $cl lessons (restore via: relay knowledge restore <id>)"
+  fi
 }
 
 _block_remove() { # file id  (idempotent)
@@ -622,6 +638,95 @@ k_prune() {
     echo "Stale facts (past freshness window) — run 'relay knowledge prune --yes' to retire:"
     for id in $stale; do echo "  - $id"; done
   fi
+}
+
+_is_empty_body() { local b; b="$(_body "$1" | tr -d '[:space:]')"; [ -z "$b" ]; }
+
+_compact_move() { # apply file dest label reason  (moved=1 propagates via bash dynamic scoping)
+  if [ "$1" = 1 ]; then
+    mkdir -p "$(dirname "$3")"
+    mv "$2" "$(_uniq_dest "$3")"
+    printf 'compact: %s -> %s (%s)\n' "$4" "$(basename "$(dirname "$3")")" "$5"
+  else
+    printf 'would compact: %s -> %s (%s)\n' "$4" "$(basename "$(dirname "$3")")" "$5"
+  fi
+  moved=1
+}
+
+_compact_cap() { # apply kind max
+  local apply="$1" kind="$2" max="$3"
+  local kd="$DATA/knowledge" f id metric age tmp total excess
+  tmp="$(mktemp)"
+  for f in "$kd"/"$kind"/*.md; do
+    [ -e "$f" ] || continue
+    id="$(_fm "$f" id)"
+    if [ "$kind" = facts ]; then
+      metric="$(_fm "$f" confirmed)"; age="$(_days_since "$(_fm "$f" last_confirmed)")"
+    else
+      metric="$(_fm "$f" seen)"; age="$(_days_since "$(_fm "$f" last_seen)")"
+    fi
+    printf '%06d\t%06d\t%s\n' "${metric:-1}" "${age:-0}" "$id" >> "$tmp"
+  done
+  total="$(grep -c . "$tmp" || true)"
+  excess=$(( ${total:-0} - max ))
+  if [ "$excess" -gt 0 ]; then
+    # lowest metric first, then oldest (largest age); compact the bottom `excess`
+    while IFS=$'\t' read -r _m _a id; do
+      _compact_move "$apply" "$kd/$kind/$id.md" "$kd/$kind/cold/$id.md" "$kind/$id" "over cap ($total > $max)"
+    done < <(sort -t$'\t' -k1,1n -k2,2nr "$tmp" | head -n "$excess")
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+k_compact() {
+  local apply=0; [ "${1:-}" = "--yes" ] && apply=1
+  local kd="$DATA/knowledge" f id kind moved=0
+  [ -d "$kd" ] || { echo "(no knowledge yet)"; return 0; }
+  _lock || return 1
+  # 1. empty sweep -> superseded (empties are write bugs, not knowledge)
+  for kind in facts lessons; do
+    for f in "$kd"/"$kind"/*.md; do
+      [ -e "$f" ] || continue
+      _is_empty_body "$f" || continue
+      id="$(_fm "$f" id)"
+      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty body"
+    done
+  done
+  # 2. cold archive: unreinforced lessons older than RELAY_LESSON_COLD_DAYS
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    [ "$(_fm "$f" seen)" -le 1 ] 2>/dev/null || continue
+    [ "$(_days_since "$(_fm "$f" last_seen)")" -gt "$RELAY_LESSON_COLD_DAYS" ] || continue
+    id="$(_fm "$f" id)"
+    _compact_move "$apply" "$f" "$kd/lessons/cold/$id.md" "lessons/$id" "seen:1 older than ${RELAY_LESSON_COLD_DAYS}d"
+  done
+  # 3. caps (facts never leave except via caps here or prune; lessons via caps)
+  _compact_cap "$apply" facts "$RELAY_FACTS_MAX"
+  _compact_cap "$apply" lessons "$RELAY_LESSONS_MAX"
+  _kindex
+  _unlock
+  [ "$moved" = 0 ] && echo "(nothing to compact)"
+  return 0
+}
+
+k_restore() {
+  local id; id="$(_slugify "${1:-}")"
+  local kd="$DATA/knowledge" kind src
+  _lock || return 1
+  for kind in facts lessons; do
+    src="$kd/$kind/cold/$id.md"
+    if [ -f "$src" ]; then
+      mv "$src" "$(_uniq_dest "$kd/$kind/$id.md")"
+      _kindex
+      _unlock
+      echo "restored: $id ($kind)"
+      return 0
+    fi
+  done
+  _unlock
+  echo "relay: no cold entry: $id" >&2
+  return 1
 }
 
 k_why() {

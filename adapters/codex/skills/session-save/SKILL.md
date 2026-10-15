@@ -20,3 +20,6 @@ Persist a Relay handoff for the next agent.
    `knowledge add --fact --near` then `--fact --id <slug>`; lessons via
    `knowledge add --lesson --id <slug>`, using `"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
    and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"`. Offer graduation only when prompted and approved.
+If `knowledge list` reports counts over cap (or the session-start load warned
+"(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run it
+unasked.

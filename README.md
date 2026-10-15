@@ -37,16 +37,46 @@ This is Relay's core invariant and what keeps it portable:
 
 ## Install (in any repo)
 
+From the root of the repo you want Relay in:
+
 ```bash
-curl -fsSL https://<host>/relay/install.sh | bash
-# or: download install.sh, read it, then `bash install.sh`
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash
 ```
 
-The installer detects the harness(es) present, lays down `.relay/` (the tool —
-committed, travels via git), wires the `SessionStart` hook plus a save command for
-each harness, gitignores `.session-log/` (your handoffs and knowledge — local
-only), and plants the `<!-- relay:learned -->` anchor in `CLAUDE.md`/`AGENTS.md`.
-It is additive and reversible — nothing existing is rewritten.
+Pass flags after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --clis claude,cursor   # no prompt
+curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --detect              # only CLIs already present
+```
+
+Or download it, read it, then run it: `curl -fsSLO https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh && bash install.sh`.
+
+With a local clone of this repo, run the source installer instead (same flags):
+
+```bash
+bash ~/Documents/GitHub/relay/install.sh
+```
+
+The installer asks which CLIs to set up (Claude Code, Codex, OpenCode, Cursor, Grok Build),
+with any already present in the repo pre-checked. Toggle by number, `a` for all,
+Enter to finish. Without a terminal it falls back to `--detect`. It then lays down
+`.relay/` (the tool — committed, travels via git), wires a session-start load plus
+save commands for each chosen CLI, gitignores `.session-log/` (your handoffs and
+knowledge — local only), and appends one labeled block per CLI to `CLAUDE.md` /
+`AGENTS.md`. It is additive, idempotent, and reversible — nothing existing is rewritten.
+
+| CLI | Load at session start | Save / learn / compact |
+|-----|-----------------------|------------------------|
+| Claude Code | `SessionStart` hook in `.claude/settings.json` | `.claude/skills/` → `/session-save`, `/relay-learn`, `/relay-compact` |
+| Codex | `SessionStart` hook in `.codex/config.toml` + `AGENTS.md` fallback | `.codex/skills/` → `$session-save`, `$relay-learn`, `$relay-compact` |
+| OpenCode | `instructions` snapshot in `opencode.json` | `.opencode/commands/` → `/session-save`, `/relay-learn`, `/relay-compact` |
+| Cursor | `AGENTS.md` block (reads `.session-log/latest.md` + `index.md`) | `.cursor/skills/` → `session-save`, `relay-learn`, `relay-compact` |
+| Grok Build | `.grok/hooks/relay.json` (run `/hooks-trust` once) + `AGENTS.md` block | `.grok/skills/` → `session-save`, `relay-learn`, `relay-compact` |
+
+Claude Code, Cursor, and Grok share one skill set (`adapters/skills/`). Every
+install also ships `.relay/tests/smoke-compact.sh`, the contract test for
+`knowledge compact` / `restore`.
 
 ## Use
 
