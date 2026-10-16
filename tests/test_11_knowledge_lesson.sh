@@ -27,7 +27,7 @@ assert_file "$KD/use-tabs-not-spaces.md"
 
 # derived index lists the active lessons
 assert_file "$DIR/knowledge/index.md"
-assert_contains "$(cat "$DIR/knowledge/index.md")" "lesson · schema-types-first · seen:2 · sessions:1"
+assert_match "$(cat "$DIR/knowledge/index.md")" "^\\| schema-types-first +\\| 2 +\\| 1 +\\| $today \\| active +\\|$"
 
 # distinct-session gate (R6): reinforce on a LATER day → sessions increments (not just seen)
 old="$(date -v-2d +%F 2>/dev/null || date -d '2 days ago' +%F)"
