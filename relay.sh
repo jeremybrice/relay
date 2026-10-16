@@ -14,6 +14,7 @@ RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
 RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
 RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
+RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
   echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
@@ -85,6 +86,17 @@ _index_update() {
 
 _unlock() { [ -n "${DATA:-}" ] && rm -rf "$DATA/.lock" 2>/dev/null || true; }
 
+_format_have() { local v; v="$(cat "$DATA/.relay-format" 2>/dev/null || true)"; case "$v" in ''|*[!0-9]*) v=0;; esac; printf '%s' "$v"; }
+
+_format_ok() { # refuse a store written by a newer Relay; stamp an older or unstamped one
+  local have; have="$(_format_have)"
+  if [ "$have" -gt "$RELAY_FORMAT" ]; then
+    echo "relay: $DATA uses format $have but this relay.sh writes format $RELAY_FORMAT; update this repo's Relay with: install.sh --detect" >&2
+    return 1
+  fi
+  [ "$have" = "$RELAY_FORMAT" ] || printf '%s\n' "$RELAY_FORMAT" > "$DATA/.relay-format"
+}
+
 _lock() {
   local lock="$DATA/.lock" waited=0 pid ts now
   mkdir -p "$DATA"
@@ -104,6 +116,7 @@ _lock() {
   done
   printf '%s\n%s\n' "$$" "$(date +%s)" > "$lock/info"
   trap _unlock EXIT
+  _format_ok || { _unlock; return 1; }
 }
 
 _prune() {
@@ -221,6 +234,9 @@ cmd_load() {
     out="⚠ Last saved: $sdate — $days days ago"$'\n\n'
   else
     out="Last saved: $sdate ($days day(s) ago)"$'\n\n'
+  fi
+  if [ "$(_format_have)" -gt "$RELAY_FORMAT" ]; then
+    out="⚠ This .session-log was written by a newer Relay (format $(_format_have)); update .relay/ with install.sh --detect before saving."$'\n\n'"$out"
   fi
   n="$(wc -w < "$latest" | tr -d ' ')"
   if [ "${n:-0}" -gt "$RELAY_WORD_CAP" ]; then
