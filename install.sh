@@ -130,13 +130,39 @@ PY
   fi
 }
 
+drop_legacy_codex_toml() { # older installs appended a [[hooks.SessionStart]] block Codex never ran
+  local cfg=".codex/config.toml"
+  [ -f "$cfg" ] && grep -qF "# adapters/codex/hooks.relay.toml" "$cfg" || return 0
+  awk '
+    index($0, "# adapters/codex/hooks.relay.toml") == 1 { skip = 2; next }
+    skip == 2 && $0 == "[[hooks.SessionStart]]" { skip = 1; next }
+    skip == 1 && index($0, "relay-session-start.sh") { skip = 0; next }
+    { skip = 0; print }' "$cfg" > "$cfg.relaytmp" && mv "$cfg.relaytmp" "$cfg"
+  grep -q '[^[:space:]]' "$cfg" || rm -f "$cfg"
+}
+
 wire_codex() {
   mkdir -p .codex/skills
   [ -d .relay/adapters/codex/skills ] && cp -R .relay/adapters/codex/skills/* .codex/skills/ 2>/dev/null || true
   append_block AGENTS.md .relay/adapters/codex/AGENTS.relay.md
-  local cfg=".codex/config.toml"
-  touch "$cfg"
-  grep -qF "relay-session-start.sh" "$cfg" 2>/dev/null || cat .relay/adapters/codex/hooks.relay.toml >> "$cfg"
+  drop_legacy_codex_toml
+  local hj=".codex/hooks.json" src=".relay/adapters/codex/hooks.relay.json"
+  if [ ! -f "$hj" ]; then cp "$src" "$hj"; return 0; fi
+  grep -qF "relay-session-start.sh" "$hj" && return 0    # idempotent
+  if command -v jq >/dev/null 2>&1; then
+    jq --slurpfile r "$src" '.hooks.SessionStart = ((.hooks.SessionStart // []) + $r[0].hooks.SessionStart)' \
+      "$hj" > "$hj.tmp" && mv "$hj.tmp" "$hj"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$hj" "$src" <<'PY'
+import json, sys
+p, src = sys.argv[1], sys.argv[2]
+d = json.load(open(p)); r = json.load(open(src))
+d.setdefault("hooks", {}).setdefault("SessionStart", []).extend(r["hooks"]["SessionStart"])
+json.dump(d, open(p, "w"), indent=2)
+PY
+  else
+    echo "relay: cannot auto-merge $hj; add the SessionStart entry from $src by hand" >&2
+  fi
 }
 
 wire_opencode() {
@@ -301,5 +327,6 @@ main() {
   for c in $selected; do labels="$labels, $(cli_label "$c")"; done
   echo "relay: installed for ${labels#, }. Handoffs will accumulate in .session-log/ (gitignored)."
   case " $selected " in *" grok "*) echo "relay: in Grok, run /hooks-trust once so the SessionStart hook can load the handoff.";; esac
+  case " $selected " in *" codex "*) echo "relay: in Codex, run /hooks once to review and trust the Relay SessionStart hook.";; esac
 }
 main "$@"

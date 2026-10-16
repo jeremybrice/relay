@@ -11,7 +11,7 @@ SRC="$(cd .. && pwd)"; TMP="$(mktemp -d)"
 printf '1 2\n4 5\n\n' > "$TMP/answers"
 ( cd "$TMP" && RELAY_TTY="$TMP/answers" bash "$SRC/install.sh" --from "$SRC" 2>"$TMP/err" )
 assert_contains "$(cat "$TMP/err")" "[x] Claude Code"
-assert_file "$TMP/.codex/config.toml"
+assert_file "$TMP/.codex/hooks.json"
 assert_file "$TMP/.grok/hooks/relay.json"
 assert_file "$TMP/.cursor/skills/session-save/SKILL.md"
 assert_contains "$(cat "$TMP/AGENTS.md")" "(Cursor)"

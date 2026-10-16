@@ -27,10 +27,10 @@ assert_contains "$out" "graduated rules"
 RELAY_FACTS_CAP=8 "$RELAY" knowledge add --fact --id f2 "second fact about something else entirely here now" --dir "$DIR" >/dev/null
 out="$(RELAY_FACTS_CAP=8 "$RELAY" load --dir "$DIR")"
 assert_contains "$out" "of"
-assert_contains "$out" "not loaded"
+assert_contains "$out" "listed by id"
 
 # codex format stays valid JSON with knowledge present
 out="$("$RELAY" load --dir "$DIR" --format codex)"
-assert_contains "$out" '"systemMessage"'
+assert_contains "$out" '"additionalContext"'
 assert_contains "$out" '"hookEventName":"SessionStart"'
 pass "knowledge load: inject, no graduated double-inject, non-silent cap, codex JSON"

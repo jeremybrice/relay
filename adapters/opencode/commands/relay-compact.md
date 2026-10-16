@@ -29,7 +29,14 @@ as `R` and `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
    additionally need per-item user OK.
 5. Apply only through existing primitives:
-   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+   - merge/rewrite (body on stdin; closing `RELAY_BODY` at the start of its line):
+
+```bash
+R knowledge add --fact|--lesson --id <kept-slug> - D <<'RELAY_BODY'
+<rewritten body>
+RELAY_BODY
+```
+
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
    - approved graduations: `R knowledge graduate <id> D`

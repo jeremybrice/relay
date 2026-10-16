@@ -14,6 +14,7 @@ RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
 RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
 RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
+RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
   echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
@@ -85,6 +86,17 @@ _index_update() {
 
 _unlock() { [ -n "${DATA:-}" ] && rm -rf "$DATA/.lock" 2>/dev/null || true; }
 
+_format_have() { local v; v="$(cat "$DATA/.relay-format" 2>/dev/null || true)"; case "$v" in ''|*[!0-9]*) v=0;; esac; printf '%s' "$v"; }
+
+_format_ok() { # refuse a store written by a newer Relay; stamp an older or unstamped one
+  local have; have="$(_format_have)"
+  if [ "$have" -gt "$RELAY_FORMAT" ]; then
+    echo "relay: $DATA uses format $have but this relay.sh writes format $RELAY_FORMAT; update this repo's Relay with: install.sh --detect" >&2
+    return 1
+  fi
+  [ "$have" = "$RELAY_FORMAT" ] || printf '%s\n' "$RELAY_FORMAT" > "$DATA/.relay-format"
+}
+
 _lock() {
   local lock="$DATA/.lock" waited=0 pid ts now
   mkdir -p "$DATA"
@@ -104,14 +116,14 @@ _lock() {
   done
   printf '%s\n%s\n' "$$" "$(date +%s)" > "$lock/info"
   trap _unlock EXIT
+  _format_ok || { _unlock; return 1; }
 }
 
-_prune() {
-  local n=0 f
-  for f in $(ls -1 "$DATA/history"/*.md 2>/dev/null | sort -r); do
-    n=$((n+1))
-    [ "$n" -gt "$RELAY_WINDOW" ] && rm -f "$f"
-  done
+_prune() { # keep the newest RELAY_WINDOW history files; glob order is ascending by YYYY-MM-DD name
+  local files i
+  files=("$DATA/history"/*.md)
+  [ -e "${files[0]}" ] || return 0
+  for (( i = 0; i < ${#files[@]} - RELAY_WINDOW; i++ )); do rm -f "${files[$i]}"; done
   return 0
 }
 
@@ -138,31 +150,38 @@ _ttl_limit() { # raw on-disk ttl -> safe numeric day limit; anything not a small
   printf '%s' "$(( 10#$t ))"   # force base-10 (no "08" octal error) and normalize leading zeros
 }
 
+_kblock() { # word cap; ranked "...<TAB>id<TAB>line" rows on stdin -> each line in full if it still fits the cap (rank order), the rest on one id-only line
+  awk -F'\t' -v cap="$1" '
+    { id = $(NF - 1); line = $NF; n = split(line, w, " ")
+      if (words + n <= cap || shown == 0) { words += n; shown++; print line; next }
+      more++; rest = rest (more > 1 ? ", " : "") id }
+    END { if (more) printf "More (%d, by id; open with: relay knowledge why <id>): %s\n", more, rest }'
+}
+
 _load_knowledge() {
-  local kd="$DATA/knowledge" f id body conf last ttl age
+  local kd="$DATA/knowledge" f id body conf last ttl age seen
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
   local out="" tmp sorted total shown block exp=0 conflicts=0
 
-  # ---- FACTS: rank by confirmed, then recency ----
+  # ---- FACTS: rank by confirmed, then recency; every entry named by id ----
   tmp="$(mktemp)"
   for f in "$kd"/facts/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; conf="$(_fm "$f" confirmed)"; last="$(_fm "$f" last_confirmed)"; ttl="$(_fm "$f" ttl)"
-    body="$(_body "$f" | tr '\n' ' ')"
+    body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
     age="$(_days_since "$last")"
     local lim; lim="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$lim" ] && exp=$(( exp + 1 ))
     [ -f "$kd/facts/$id.conflict" ] && conflicts=$(( conflicts + 1 ))
-    printf '%03d\t%09d\t- %s (confirmed:%s)\n' "${conf:-1}" "$(( 999999 - age ))" "$body" "${conf:-1}" >> "$tmp"
+    printf '%03d\t%09d\t%s\t- `%s`: %s (confirmed:%s)\n' \
+      "${conf:-1}" "$(( 999999 - age ))" "$id" "$id" "$body" "${conf:-1}" >> "$tmp"
   done
   if [ -s "$tmp" ]; then
     total="$(grep -c . "$tmp" || true)"
-    sorted="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp")"   # explicit numeric keys: confirmed desc, then recency desc
-    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_FACTS_CAP" -F'\t' '
-      { line=$3; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
-    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    block="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | _kblock "$RELAY_FACTS_CAP")"
+    shown="$(printf '%s\n' "$block" | grep -c '^- ' || true)"
     out="${out}## What this repo knows — facts"$'\n'
-    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total facts shown — $(( total - shown )) not loaded may include load-bearing truths; open .session-log/knowledge/facts/"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total facts shown in full; the rest are listed by id at the end of this section"$'\n'
     out="${out}${block}"$'\n'
     [ "$exp" -gt 0 ] && out="${out}($exp fact(s) past freshness window — run: relay knowledge prune)"$'\n'
     [ "$conflicts" -gt 0 ] && out="${out}(⚠ $conflicts fact conflict(s) pending — run: relay knowledge resolve <id>)"$'\n'
@@ -170,21 +189,23 @@ _load_knowledge() {
   fi
   rm -f "$tmp"
 
-  # ---- LESSONS (active): rank by seen ----
+  # ---- LESSONS (active): rank by seen, then recency; every entry named by id ----
   tmp="$(mktemp)"
   for f in "$kd"/lessons/*.md; do
     [ -e "$f" ] || continue
-    body="$(_body "$f" | tr '\n' ' ')"
-    printf '%05d\t- %s\n' "$(_fm "$f" seen)" "$body" >> "$tmp"
+    id="$(_fm "$f" id)"; seen="$(_fm "$f" seen)"; seen="${seen:-1}"
+    body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
+    age="$(_days_since "$(_fm "$f" last_seen)")"
+    printf '%05d\t%09d\t%s\t- `%s`: %s (seen:%s, sessions:%s)\n' \
+      "$seen" "$(( 999999 - age ))" "$id" "$id" "$body" "$seen" "$(_fm "$f" sessions)" >> "$tmp"
   done
   if [ -s "$tmp" ]; then
     total="$(grep -c . "$tmp" || true)"
-    sorted="$(sort -t$'\t' -k1,1nr "$tmp")"   # explicit numeric key: seen desc
-    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_LESSONS_CAP" -F'\t' '
-      { line=$2; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
-    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    block="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | _kblock "$RELAY_LESSONS_CAP")"
+    shown="$(printf '%s\n' "$block" | grep -c '^- ' || true)"
     out="${out}## What this repo knows — lessons"$'\n'
-    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown — open .session-log/knowledge/lessons/"$'\n'
+    out="${out}(If one of these applied again this session, re-assert it by id when saving: knowledge add --lesson --id <id> ...)"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown in full; the rest are listed by id at the end of this section"$'\n'
     out="${out}${block}"$'\n'
     [ "$total" -gt "$RELAY_LESSONS_MAX" ] && out="${out}(⚠ $total lessons over cap $RELAY_LESSONS_MAX — run: relay knowledge compact)"$'\n'
   fi
@@ -222,6 +243,9 @@ cmd_load() {
   else
     out="Last saved: $sdate ($days day(s) ago)"$'\n\n'
   fi
+  if [ "$(_format_have)" -gt "$RELAY_FORMAT" ]; then
+    out="⚠ This .session-log was written by a newer Relay (format $(_format_have)); update .relay/ with install.sh --detect before saving."$'\n\n'"$out"
+  fi
   n="$(wc -w < "$latest" | tr -d ' ')"
   if [ "${n:-0}" -gt "$RELAY_WORD_CAP" ]; then
     out="$out$(awk -v cap="$RELAY_WORD_CAP" 'BEGIN{c=0}{c+=NF;print} c>=cap{print "\n…[truncated — open .session-log/latest.md for the full handoff]"; exit}' "$latest")"
@@ -233,7 +257,7 @@ cmd_load() {
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
   if [ "$format" = "codex" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
   elif [ "$format" = "grok" ]; then
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
@@ -271,6 +295,8 @@ _slugify() {
     | tr -s '-' | sed -e 's/^-//' -e 's/-$//'
 }
 
+_squash() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'; }
+
 _fm() { sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n1; }
 
 _fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatter)
@@ -290,11 +316,11 @@ _set_body() { # file body
   mv "$tmp" "$1"
 }
 
-_provenance() {
-  local src sess
-  src="history/$(date +%F).md"
-  if [ -f "$DATA/latest.md" ]; then
-    sess="$(sed -n 's/^session:[[:space:]]*//p' "$DATA/latest.md" | head -n1)"
+_provenance() { # today's history file, anchored to today's last saved session when there is one
+  local today src sess
+  today="$(date +%F)"; src="history/$today.md"
+  if [ -f "$DATA/latest.md" ] && [ "$(_fm "$DATA/latest.md" date)" = "$today" ]; then
+    sess="$(_fm "$DATA/latest.md" session)"
     [ -n "$sess" ] && src="$src#session-$sess"
   fi
   printf '%s' "$src"
@@ -372,6 +398,14 @@ _k_add_fact() {
   if [ -f "$f" ]; then
     if _similar "$(_body "$f")" "$body"; then
       local c; c="$(_fm "$f" confirmed)"; c=$(( ${c:-1} + 1 ))
+      if [ "$(_squash "$(_body "$f")")" != "$(_squash "$body")" ]; then
+        # a restatement is the agent's current understanding: newest wording wins, old kept for recovery
+        local prev; mkdir -p "$DATA/knowledge/facts/superseded"
+        prev="$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.prev.md")"
+        cp "$f" "$prev"
+        _set_body "$f" "$body"
+        echo "updated wording: $id (previous kept in facts/superseded/$(basename "$prev"))"
+      fi
       _fm_set "$f" confirmed "$c"; _fm_set "$f" last_confirmed "$today"
       [ "$ttl" != none ] && _fm_set "$f" ttl "$ttl"    # refresh freshness window if the agent re-set it
       echo "confirmed: $id (confirmed:$c)"
@@ -537,10 +571,16 @@ k_add() {
       --near)   near=1;        shift;;
       --id)     { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --id needs a value" >&2; return 2; };  id="$2";  shift 2;;
       --ttl)    { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --ttl needs a value" >&2; return 2; }; ttl="$2"; shift 2;;
+      -)        rest+=("$(cat)"); shift;;          # body on stdin: no shell quoting to get wrong
+      --*)      case "$1" in
+                  *[[:space:]]*) rest+=("$1"); shift;;   # a body that starts with --, not a flag
+                  *) echo "relay: unknown option for knowledge add: $1 (the body is one quoted argument, or - for stdin)" >&2; return 2;;
+                esac;;
       *)        rest+=("$1");  shift;;
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
+  [ $# -le 1 ] || { echo "relay: knowledge add takes one body argument; quote the whole body or pass - and use stdin (got $#)" >&2; return 2; }
   local body="${1:-}"
   [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
   [ -n "${body//[[:space:]]/}" ] || { echo "relay: knowledge add needs a non-empty body" >&2; return 2; }
@@ -570,9 +610,17 @@ _k_add_lesson() {
     seen="$(_fm "$f" seen)"; sess="$(_fm "$f" sessions)"; last="$(_fm "$f" last_seen)"
     seen=$(( ${seen:-1} + 1 ))
     [ "$last" != "$today" ] && sess=$(( ${sess:-1} + 1 ))
+    local prev=""
+    if [ "$(_squash "$(_body "$f")")" != "$(_squash "$body")" ]; then
+      # newest wording wins (as with facts); the previous text is kept, never destroyed
+      mkdir -p "$DATA/knowledge/lessons/superseded"
+      prev="$(_uniq_dest "$DATA/knowledge/lessons/superseded/$id.prev.md")"
+      cp "$f" "$prev"
+    fi
     _fm_set "$f" seen "$seen"; _fm_set "$f" sessions "$sess"; _fm_set "$f" last_seen "$today"
     _set_body "$f" "$body"
     echo "reinforced lesson: $id (seen:$seen sessions:$sess)"
+    [ -n "$prev" ] && echo "  wording updated; previous kept in lessons/superseded/$(basename "$prev")"
     if [ "$sess" -ge "$RELAY_GRADUATE_AT" ]; then
       echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): propose 'relay knowledge graduate $id'"
     fi
@@ -685,7 +733,11 @@ k_prune() {
   fi
 }
 
-_is_empty_body() { local b; b="$(_body "$1" | tr -d '[:space:]')"; [ -z "$b" ]; }
+_is_empty_body() { # no content, or only a stray flag token such as "--body" (an old add stored the flag as the body)
+  local b; b="$(_squash "$(_body "$1")")"
+  [ -z "$b" ] && return 0
+  printf '%s' "$b" | grep -qE '^--[a-z][a-z-]*$'   # one token only: "--no-verify is banned" is real text
+}
 
 _compact_move() { # apply file dest label reason  (moved=1 propagates via bash dynamic scoping)
   if [ "$1" = 1 ]; then
@@ -735,7 +787,7 @@ k_compact() {
       [ -e "$f" ] || continue
       _is_empty_body "$f" || continue
       id="$(_fm "$f" id)"
-      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty body"
+      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty or flag-only body"
     done
   done
   # 2. cold archive: unreinforced lessons older than RELAY_LESSON_COLD_DAYS
@@ -784,6 +836,8 @@ k_why() {
   local hist="${src%%#*}"
   if [ -n "$hist" ] && [ -f "$DATA/$hist" ]; then
     echo; echo "--- came from $src ---"; sed -n '1,40p' "$DATA/$hist"
+  elif [ -n "$hist" ]; then
+    echo; echo "(source $src is no longer on disk: history keeps the last $RELAY_WINDOW session days)"
   fi
 }
 

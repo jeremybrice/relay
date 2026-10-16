@@ -21,8 +21,8 @@ out="$("$RELAY" load --dir "$DIR")"
 assert_contains "$out" "⚠"
 assert_contains "$out" "days ago"
 
-# codex format → JSON systemMessage
+# codex format → JSON hookSpecificOutput.additionalContext
 out="$("$RELAY" load --dir "$DIR" --format codex)"
-assert_contains "$out" '"systemMessage"'
+assert_contains "$out" '"additionalContext"'
 assert_contains "$out" '"hookEventName":"SessionStart"'
 pass "load + staleness + codex format"
