@@ -979,7 +979,14 @@ as `R` and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
    additionally need per-item user OK.
 5. Apply only through existing primitives:
-   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+   - merge/rewrite (body on stdin; closing `RELAY_BODY` at the start of its line):
+
+```bash
+R knowledge add --fact|--lesson --id <kept-slug> - D <<'RELAY_BODY'
+<rewritten body>
+RELAY_BODY
+```
+
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
    - approved graduations: `R knowledge graduate <id> D`
@@ -1001,23 +1008,29 @@ description: Record a durable fact or lesson about this repo into Relay knowledg
 ---
 Capture one durable piece of knowledge about THIS repo for future sessions.
 
-1. Fact = durable repo truth; Lesson = behavioral pattern ("when X, prefer Y").
-2. For a fact, check for a match first (reuse the id, don't duplicate):
+1. Fact = durable repo truth (a command, path, gotcha, specific value, how one
+   incident was resolved). Lesson = reusable rule for future, different tasks
+   ("when X, prefer Y, because Z"). If it only makes sense for the task you just
+   did, it is a fact, not a lesson.
+2. Check for a match first (reuse the id, don't duplicate); use `--fact` or `--lesson`:
 
-   ```bash
-   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --near '<fact text>' \
-     --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
-   ```
-3. Write it with a short stable kebab-case `--id` (a fact reuses any id surfaced above):
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --near 'a few key words' \
+  --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
+```
 
-   ```bash
-   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
-     --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
-   # or a lesson:
-   "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
-     --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"
-   ```
-4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>` — only with the user's okay.
+3. Write it with a short stable kebab-case `--id`, body on stdin via `-` (closing
+   `RELAY_BODY` at the start of its line). The only options are `--fact`,
+   `--lesson`, `--id`, `--ttl`, `--near` and `--dir`; anything else is rejected.
+
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> - \
+  --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" <<'RELAY_BODY'
+<fact or lesson text>
+RELAY_BODY
+```
+
+4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>`, only with the user's okay.
 RELAY_EOF
 }
 
@@ -1030,23 +1043,34 @@ description: Save a Relay handoff for the next Codex session
 Persist a Relay handoff for the next agent.
 
 1. Author the six sections (`## Summary`, `## Changed`, `## Decisions`, `## Next`,
-   `## Watch out`, `## Open questions`) and a one-line digest.
-2. Run:
+   `## Watch out`, `## Open questions`). Carry forward every still-open item from
+   the loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
+   Compose a one-line digest with no single quotes in it.
+2. Run (keep the closing `RELAY_HANDOFF` at the start of its line):
 
-   ```bash
-   printf '%s\n' '<<six sections>>' \
-     | "${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" save \
-         --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" \
-         --digest '<<one-line digest>>'
-   ```
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" save --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" \
+  --digest '<<one-line digest>>' <<'RELAY_HANDOFF'
+<<six sections>>
+RELAY_HANDOFF
+```
+
 3. Reply: "Handoff saved for the next session."
-4. Then capture durable knowledge (skip if none): facts via
-   `knowledge add --fact --near` then `--fact --id <slug>`; lessons via
-   `knowledge add --lesson --id <slug>`, using `"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh"`
-   and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"`. Offer graduation only when prompted and approved.
-If `knowledge list` reports counts over cap (or the session-start load warned
-"(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run it
-unasked.
+4. Reinforce lessons. Session start listed each lesson with its id. For each
+   loaded lesson that actually applied again, re-assert it under the SAME id:
+
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <existing-id> - \
+  --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" <<'RELAY_BODY'
+<<lesson text>>
+RELAY_BODY
+```
+
+   Do not re-assert a lesson only because it was loaded.
+5. Capture new durable knowledge with `$relay-learn` (skip if none). Offer
+   graduation only when prompted and approved.
+6. If `knowledge list` reports counts over cap (or the session-start load warned
+   "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line. Never run it unasked.
 RELAY_EOF
 }
 
@@ -1164,7 +1188,14 @@ as `R` and `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
    additionally need per-item user OK.
 5. Apply only through existing primitives:
-   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+   - merge/rewrite (body on stdin; closing `RELAY_BODY` at the start of its line):
+
+```bash
+R knowledge add --fact|--lesson --id <kept-slug> - D <<'RELAY_BODY'
+<rewritten body>
+RELAY_BODY
+```
+
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
    - approved graduations: `R knowledge graduate <id> D`
@@ -1190,36 +1221,39 @@ description: Record a durable fact or lesson about this repo into Relay knowledg
 Capture a single durable piece of knowledge about THIS repo for future sessions.
 
 1. Decide the kind:
-   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
-   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
-2. For a fact, first check for an existing match so you reuse its id instead of
-   duplicating:
+   - **Fact**: a durable truth about the repo (a command, a path, a gotcha, a
+     specific value or count, how one incident was resolved).
+   - **Lesson**: a reusable rule for future, different tasks, phrased "when X,
+     prefer Y, because Z". If it only makes sense for the task you just did,
+     it is a fact, not a lesson.
+2. Look for an existing entry first so you reuse its id; use `--fact` or `--lesson`:
 
-   ```bash
-   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
-     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
-   ```
-3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
-   `--ttl <days>` to a fact that is only true for a while (e.g. the current sprint);
-   omit it for durable truths:
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --near 'a few key words' \
+  --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
+```
 
-   ```bash
-   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
-     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
-   # time-bound fact: ... knowledge add --fact --id current-sprint --ttl 14 '...' --dir ...
-   # or a lesson:
-   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
-     --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"
-   ```
-4. Refresh the snapshot opencode auto-loads next session so the new knowledge
-   is in context the moment the next session starts:
+3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug), body on
+   stdin via `-` (closing `RELAY_BODY` at the start of its line). Add `--ttl <days>`
+   to a fact that is only true for a while. The only options are `--fact`,
+   `--lesson`, `--id`, `--ttl`, `--near` and `--dir`; anything else is rejected.
 
-   ```bash
-   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
-     > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
-   ```
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --fact --id <slug> - \
+  --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" <<'RELAY_BODY'
+<fact or lesson text>
+RELAY_BODY
+```
+
+4. Refresh the snapshot opencode auto-loads next session:
+
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+  > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
+```
+
 5. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>` — never graduate without the user's okay.
+   `knowledge graduate <slug>`. Never graduate without the user's okay.
 RELAY_EOF
 }
 
@@ -1230,36 +1264,44 @@ description: Save a Relay handoff so the next opencode session can pick up where
 ---
 Persist a Relay handoff for the next agent.
 
-1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
-   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
-   files/paths and dated facts. Compose a one-line digest.
-2. Persist it. The script owns all file writes, rotation, and locking:
+1. Author the six sections as concise markdown (`## Summary`, `## Changed`,
+   `## Decisions`, `## Next`, `## Watch out`, `## Open questions`), naming real
+   files/paths and dated facts. Carry forward every still-open item from the
+   loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
+   Compose a one-line digest with no single quotes in it.
+2. Persist it (keep the closing `RELAY_HANDOFF` at the start of its line):
 
-   ```bash
-   printf '%s\n' '<<the six sections as markdown>>' \
-     | "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" save \
-         --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
-         --digest '<<one-line digest>>'
-   ```
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" save --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+  --digest '<<one-line digest>>' <<'RELAY_HANDOFF'
+<<the six sections as markdown>>
+RELAY_HANDOFF
+```
+
 3. Reply: "Handoff saved for the next session."
-4. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
-   `instructions` field, so the new handoff is in context the moment the next
-   session starts:
+4. Reinforce lessons. Session start listed each lesson with its id. For each
+   loaded lesson that actually applied again, re-assert it under the SAME id:
 
-   ```bash
-   "${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
-     > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
-   ```
-5. Then capture durable knowledge from this session (skip if none): for each
-   permanent repo truth run `knowledge add --fact --near` then `--fact --id <slug>`;
-   for each behavioral lesson run `knowledge add --lesson --id <slug>`. Use
-   `"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh"` and
-   `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"`. Re-run the step-4 load
-   after the knowledge writes so the snapshot stays current. If the tool says a
-   lesson is graduation-ready, offer graduation in one line.
-6. If `knowledge list` reports counts over cap (or step 4's load warned
-   "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line — never run
-   it unasked.
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" knowledge add --lesson --id <existing-id> - \
+  --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" <<'RELAY_BODY'
+<<lesson text>>
+RELAY_BODY
+```
+
+   Do not re-assert a lesson only because it was loaded.
+5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
+   says a lesson is graduation-ready, offer graduation in one line.
+6. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
+   `instructions` field (run this after any knowledge writes too):
+
+```bash
+"${OPENCODE_PROJECT_DIR:-$PWD}/.relay/relay.sh" load --dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log" \
+  > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
+```
+
+7. If `knowledge list` reports counts over cap (or step 6's load warned
+   "(⚠ N ... over cap ...)"), offer `/relay-compact` in one line. Never run it unasked.
 RELAY_EOF
 }
 
@@ -1311,7 +1353,14 @@ human-gated semantic pass. Use `"$PWD/.relay/relay.sh"` as `R` and
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
    additionally need per-item user OK.
 5. Apply only through existing primitives:
-   - merge/rewrite: `R knowledge add --fact|--lesson --id <kept-slug> '<rewritten body>' D`
+   - merge/rewrite (body on stdin; closing `RELAY_BODY` at the start of its line):
+
+```bash
+R knowledge add --fact|--lesson --id <kept-slug> - D <<'RELAY_BODY'
+<rewritten body>
+RELAY_BODY
+```
+
    - absorbed/deleted ids: `R knowledge supersede <id> D`
    - approved graduations: `R knowledge graduate <id> D`
 6. Report final counts: `R knowledge list D`. The next session picks up the
@@ -1333,29 +1382,35 @@ description: Record a durable fact or lesson about this repo into Relay knowledg
 Capture a single durable piece of knowledge about THIS repo for future sessions.
 
 1. Decide the kind:
-   - **Fact** — a durable truth about the repo (a command, a path, a gotcha).
-   - **Lesson** — a behavioral pattern ("when X, prefer Y, because Z").
-2. For a fact, first check for an existing match so you reuse its id instead of
-   duplicating:
+   - **Fact**: a durable truth about the repo (a command, a path, a gotcha, a
+     specific value or count, how one incident was resolved).
+   - **Lesson**: a reusable rule for future, different tasks, phrased "when X,
+     prefer Y, because Z". If it only makes sense for the task you just did,
+     it is a fact, not a lesson.
+2. Look for an existing entry first so you reuse its id instead of duplicating.
+   Use `--fact` or `--lesson` to match the kind:
 
-   ```bash
-   "$PWD/.relay/relay.sh" knowledge add --fact --near '<the fact text>' \
-     --dir "$PWD/.session-log"
-   ```
+```bash
+"$PWD/.relay/relay.sh" knowledge add --lesson --near 'a few key words' \
+  --dir "$PWD/.session-log"
+```
 
-3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Add
-   `--ttl <days>` to a fact that is only true for a while; omit it for durable
-   truths:
+3. Write it (reuse a surfaced id, or coin a short stable kebab-case slug). Pass
+   the body on stdin with `-` so quotes and apostrophes need no escaping, and
+   keep the closing `RELAY_BODY` at the start of its line. Add `--ttl <days>`
+   to a fact that is only true for a while; omit it for durable truths. The
+   only options are `--fact`, `--lesson`, `--id`, `--ttl`, `--near` and
+   `--dir`; anything else is rejected.
 
-   ```bash
-   "$PWD/.relay/relay.sh" knowledge add --fact --id <slug> '<fact text>' \
-     --dir "$PWD/.session-log"
-   "$PWD/.relay/relay.sh" knowledge add --lesson --id <slug> '<lesson text>' \
-     --dir "$PWD/.session-log"
-   ```
+```bash
+"$PWD/.relay/relay.sh" knowledge add --fact --id <slug> - \
+  --dir "$PWD/.session-log" <<'RELAY_BODY'
+<fact or lesson text>
+RELAY_BODY
+```
 
 4. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>` — never graduate without the user's okay.
+   `knowledge graduate <slug>`. Never graduate without the user's okay.
 
 Do not write `.session-log/relay-instructions.md`. Session start reads
 `.session-log/latest.md` and `.session-log/index.md` only.
@@ -1370,24 +1425,40 @@ description: Save a Relay handoff so the next session can pick up where you left
 
 Persist a Relay handoff for the next agent.
 
-1. Author the six sections as concise markdown — `## Summary`, `## Changed`,
-   `## Decisions`, `## Next`, `## Watch out`, `## Open questions` — naming real
-   files/paths and dated facts. Compose a one-line digest.
-2. Persist it. The script owns all file writes, rotation, and locking:
+1. Author the six sections as concise markdown (`## Summary`, `## Changed`,
+   `## Decisions`, `## Next`, `## Watch out`, `## Open questions`), naming real
+   files/paths and dated facts. Carry forward every still-open item from the
+   loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
+   Compose a one-line digest with no single quotes in it.
+2. Persist it. The script owns all file writes, rotation, and locking. The
+   quoted heredoc passes the markdown through untouched, apostrophes included.
+   Keep the closing `RELAY_HANDOFF` at the start of its line:
 
-   ```bash
-   printf '%s\n' '<<the six sections as markdown>>' \
-     | "$PWD/.relay/relay.sh" save \
-         --dir "$PWD/.session-log" \
-         --digest '<<one-line digest>>'
-   ```
+```bash
+"$PWD/.relay/relay.sh" save --dir "$PWD/.session-log" \
+  --digest '<<one-line digest>>' <<'RELAY_HANDOFF'
+<<the six sections as markdown>>
+RELAY_HANDOFF
+```
 
 3. Reply: "Handoff saved for the next session."
-4. Then capture durable knowledge from this session (skip if none) using the
-   `relay-learn` skill, or call `"$PWD/.relay/relay.sh"` `knowledge add` with
-   `--dir "$PWD/.session-log"`. If the tool says a lesson is graduation-ready,
-   offer graduation in one line. Never graduate without the user's okay.
-5. If `knowledge list` reports counts over cap (or a load warned
+4. Reinforce lessons. Session start listed each lesson with its id. For each
+   loaded lesson that actually applied again in this session, re-assert it
+   under the SAME id (sharpen the wording if you learned more):
+
+```bash
+"$PWD/.relay/relay.sh" knowledge add --lesson --id <existing-id> - \
+  --dir "$PWD/.session-log" <<'RELAY_BODY'
+<<lesson text>>
+RELAY_BODY
+```
+
+   Re-asserting on a new day is what moves a lesson toward graduation. Do not
+   re-assert a lesson only because it was loaded.
+5. Capture new durable knowledge from this session (skip if none) with the
+   `relay-learn` skill. If the tool says a lesson is graduation-ready, offer
+   graduation in one line. Never graduate without the user's okay.
+6. If `knowledge list` reports counts over cap (or a load warned
    "(⚠ N ... over cap ...)"), offer `relay-compact` in one line.
    Never run it unasked.
 
