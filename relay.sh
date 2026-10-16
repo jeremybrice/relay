@@ -151,31 +151,38 @@ _ttl_limit() { # raw on-disk ttl -> safe numeric day limit; anything not a small
   printf '%s' "$(( 10#$t ))"   # force base-10 (no "08" octal error) and normalize leading zeros
 }
 
+_kblock() { # word cap; ranked "...<TAB>id<TAB>line" rows on stdin -> each line in full if it still fits the cap (rank order), the rest on one id-only line
+  awk -F'\t' -v cap="$1" '
+    { id = $(NF - 1); line = $NF; n = split(line, w, " ")
+      if (words + n <= cap || shown == 0) { words += n; shown++; print line; next }
+      more++; rest = rest (more > 1 ? ", " : "") id }
+    END { if (more) printf "More (%d, by id; open with: relay knowledge why <id>): %s\n", more, rest }'
+}
+
 _load_knowledge() {
-  local kd="$DATA/knowledge" f id body conf last ttl age
+  local kd="$DATA/knowledge" f id body conf last ttl age seen
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
   local out="" tmp sorted total shown block exp=0 conflicts=0
 
-  # ---- FACTS: rank by confirmed, then recency ----
+  # ---- FACTS: rank by confirmed, then recency; every entry named by id ----
   tmp="$(mktemp)"
   for f in "$kd"/facts/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; conf="$(_fm "$f" confirmed)"; last="$(_fm "$f" last_confirmed)"; ttl="$(_fm "$f" ttl)"
-    body="$(_body "$f" | tr '\n' ' ')"
+    body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
     age="$(_days_since "$last")"
     local lim; lim="$(_ttl_limit "$ttl")"
     [ "$age" -gt "$lim" ] && exp=$(( exp + 1 ))
     [ -f "$kd/facts/$id.conflict" ] && conflicts=$(( conflicts + 1 ))
-    printf '%03d\t%09d\t- %s (confirmed:%s)\n' "${conf:-1}" "$(( 999999 - age ))" "$body" "${conf:-1}" >> "$tmp"
+    printf '%03d\t%09d\t%s\t- `%s`: %s (confirmed:%s)\n' \
+      "${conf:-1}" "$(( 999999 - age ))" "$id" "$id" "$body" "${conf:-1}" >> "$tmp"
   done
   if [ -s "$tmp" ]; then
     total="$(grep -c . "$tmp" || true)"
-    sorted="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp")"   # explicit numeric keys: confirmed desc, then recency desc
-    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_FACTS_CAP" -F'\t' '
-      { line=$3; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
-    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    block="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | _kblock "$RELAY_FACTS_CAP")"
+    shown="$(printf '%s\n' "$block" | grep -c '^- ' || true)"
     out="${out}## What this repo knows — facts"$'\n'
-    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total facts shown — $(( total - shown )) not loaded may include load-bearing truths; open .session-log/knowledge/facts/"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total facts shown in full; the rest are listed by id at the end of this section"$'\n'
     out="${out}${block}"$'\n'
     [ "$exp" -gt 0 ] && out="${out}($exp fact(s) past freshness window — run: relay knowledge prune)"$'\n'
     [ "$conflicts" -gt 0 ] && out="${out}(⚠ $conflicts fact conflict(s) pending — run: relay knowledge resolve <id>)"$'\n'
@@ -183,21 +190,23 @@ _load_knowledge() {
   fi
   rm -f "$tmp"
 
-  # ---- LESSONS (active): rank by seen ----
+  # ---- LESSONS (active): rank by seen, then recency; every entry named by id ----
   tmp="$(mktemp)"
   for f in "$kd"/lessons/*.md; do
     [ -e "$f" ] || continue
-    body="$(_body "$f" | tr '\n' ' ')"
-    printf '%05d\t- %s\n' "$(_fm "$f" seen)" "$body" >> "$tmp"
+    id="$(_fm "$f" id)"; seen="$(_fm "$f" seen)"; seen="${seen:-1}"
+    body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
+    age="$(_days_since "$(_fm "$f" last_seen)")"
+    printf '%05d\t%09d\t%s\t- `%s`: %s (seen:%s, sessions:%s)\n' \
+      "$seen" "$(( 999999 - age ))" "$id" "$id" "$body" "$seen" "$(_fm "$f" sessions)" >> "$tmp"
   done
   if [ -s "$tmp" ]; then
     total="$(grep -c . "$tmp" || true)"
-    sorted="$(sort -t$'\t' -k1,1nr "$tmp")"   # explicit numeric key: seen desc
-    block="$(printf '%s\n' "$sorted" | awk -v cap="$RELAY_LESSONS_CAP" -F'\t' '
-      { line=$2; n=split(line,w," "); if(words+n>cap && nl>0) next; words+=n; nl++; print line }')"
-    shown="$(printf '%s\n' "$block" | grep -c . || true)"
+    block="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | _kblock "$RELAY_LESSONS_CAP")"
+    shown="$(printf '%s\n' "$block" | grep -c '^- ' || true)"
     out="${out}## What this repo knows — lessons"$'\n'
-    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown — open .session-log/knowledge/lessons/"$'\n'
+    out="${out}(If one of these applied again this session, re-assert it by id when saving: knowledge add --lesson --id <id> ...)"$'\n'
+    [ "$shown" -lt "$total" ] && out="${out}⚠ $shown of $total lessons shown in full; the rest are listed by id at the end of this section"$'\n'
     out="${out}${block}"$'\n'
     [ "$total" -gt "$RELAY_LESSONS_MAX" ] && out="${out}(⚠ $total lessons over cap $RELAY_LESSONS_MAX — run: relay knowledge compact)"$'\n'
   fi
