@@ -119,12 +119,11 @@ _lock() {
   _format_ok || { _unlock; return 1; }
 }
 
-_prune() {
-  local n=0 f
-  for f in $(ls -1 "$DATA/history"/*.md 2>/dev/null | sort -r); do
-    n=$((n+1))
-    [ "$n" -gt "$RELAY_WINDOW" ] && rm -f "$f"
-  done
+_prune() { # keep the newest RELAY_WINDOW history files; glob order is ascending by YYYY-MM-DD name
+  local files i
+  files=("$DATA/history"/*.md)
+  [ -e "${files[0]}" ] || return 0
+  for (( i = 0; i < ${#files[@]} - RELAY_WINDOW; i++ )); do rm -f "${files[$i]}"; done
   return 0
 }
 
@@ -317,11 +316,11 @@ _set_body() { # file body
   mv "$tmp" "$1"
 }
 
-_provenance() {
-  local src sess
-  src="history/$(date +%F).md"
-  if [ -f "$DATA/latest.md" ]; then
-    sess="$(sed -n 's/^session:[[:space:]]*//p' "$DATA/latest.md" | head -n1)"
+_provenance() { # today's history file, anchored to today's last saved session when there is one
+  local today src sess
+  today="$(date +%F)"; src="history/$today.md"
+  if [ -f "$DATA/latest.md" ] && [ "$(_fm "$DATA/latest.md" date)" = "$today" ]; then
+    sess="$(_fm "$DATA/latest.md" session)"
     [ -n "$sess" ] && src="$src#session-$sess"
   fi
   printf '%s' "$src"
@@ -829,6 +828,8 @@ k_why() {
   local hist="${src%%#*}"
   if [ -n "$hist" ] && [ -f "$DATA/$hist" ]; then
     echo; echo "--- came from $src ---"; sed -n '1,40p' "$DATA/$hist"
+  elif [ -n "$hist" ]; then
+    echo; echo "(source $src is no longer on disk: history keeps the last $RELAY_WINDOW session days)"
   fi
 }
 
