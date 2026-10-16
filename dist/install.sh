@@ -288,6 +288,8 @@ _slugify() {
     | tr -s '-' | sed -e 's/^-//' -e 's/-$//'
 }
 
+_squash() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'; }
+
 _fm() { sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n1; }
 
 _fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatter)
@@ -389,6 +391,14 @@ _k_add_fact() {
   if [ -f "$f" ]; then
     if _similar "$(_body "$f")" "$body"; then
       local c; c="$(_fm "$f" confirmed)"; c=$(( ${c:-1} + 1 ))
+      if [ "$(_squash "$(_body "$f")")" != "$(_squash "$body")" ]; then
+        # a restatement is the agent's current understanding: newest wording wins, old kept for recovery
+        local prev; mkdir -p "$DATA/knowledge/facts/superseded"
+        prev="$(_uniq_dest "$DATA/knowledge/facts/superseded/$id.prev.md")"
+        cp "$f" "$prev"
+        _set_body "$f" "$body"
+        echo "updated wording: $id (previous kept in facts/superseded/$(basename "$prev"))"
+      fi
       _fm_set "$f" confirmed "$c"; _fm_set "$f" last_confirmed "$today"
       [ "$ttl" != none ] && _fm_set "$f" ttl "$ttl"    # refresh freshness window if the agent re-set it
       echo "confirmed: $id (confirmed:$c)"
