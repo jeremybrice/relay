@@ -31,6 +31,6 @@ assert_contains "$out" "listed by id"
 
 # codex format stays valid JSON with knowledge present
 out="$("$RELAY" load --dir "$DIR" --format codex)"
-assert_contains "$out" '"systemMessage"'
+assert_contains "$out" '"additionalContext"'
 assert_contains "$out" '"hookEventName":"SessionStart"'
 pass "knowledge load: inject, no graduated double-inject, non-silent cap, codex JSON"

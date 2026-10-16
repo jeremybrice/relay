@@ -7,10 +7,10 @@ cp "$SRC/adapters/codex/relay-session-start.sh" "$TMP/.relay/cx-start.sh"; chmod
 ( cd "$TMP" && printf '## Summary\nhello from codex\n' | .relay/relay.sh save --dir "$TMP/.session-log" --digest "d" )
 
 out="$(cd "$TMP" && CODEX_PROJECT_DIR="$TMP" bash .relay/cx-start.sh)"
-assert_contains "$out" '"systemMessage"'
+assert_contains "$out" '"additionalContext"'
 assert_contains "$out" 'hello from codex'
 # config + L2 + skill present
-assert_contains "$(cat "$SRC/adapters/codex/hooks.relay.toml")" "SessionStart"
+assert_contains "$(cat "$SRC/adapters/codex/hooks.relay.json")" "SessionStart"
 assert_contains "$(cat "$SRC/adapters/codex/skills/session-save/SKILL.md")" "relay.sh"
 assert_contains "$(cat "$SRC/adapters/codex/AGENTS.relay.md")" "session-log"
 # relay-learn records a FACT with --fact --id (regression: issue #3 — was --lesson)

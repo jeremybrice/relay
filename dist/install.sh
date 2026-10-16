@@ -258,7 +258,7 @@ cmd_load() {
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
   if [ "$format" = "codex" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
   elif [ "$format" = "grok" ]; then
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
@@ -855,7 +855,7 @@ emit_adapters() {
   mkdir -p ".relay/adapters/codex"
   emit__adapters_codex_AGENTS_relay_md > ".relay/adapters/codex/AGENTS.relay.md"
   mkdir -p ".relay/adapters/codex"
-  emit__adapters_codex_hooks_relay_toml > ".relay/adapters/codex/hooks.relay.toml"
+  emit__adapters_codex_hooks_relay_json > ".relay/adapters/codex/hooks.relay.json"
   mkdir -p ".relay/adapters/codex"
   emit__adapters_codex_relay_session_start_sh > ".relay/adapters/codex/relay-session-start.sh"
   mkdir -p ".relay/adapters/codex/skills/relay-compact"
@@ -933,18 +933,33 @@ At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
 RELAY_EOF
 }
 
-emit__adapters_codex_hooks_relay_toml() { cat <<'RELAY_EOF'
-# adapters/codex/hooks.relay.toml — merge into .codex/config.toml
-[[hooks.SessionStart]]
-command = [".relay/adapters/codex/relay-session-start.sh"]
+emit__adapters_codex_hooks_relay_json() { cat <<'RELAY_EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.relay/adapters/codex/relay-session-start.sh\"",
+            "additionalContextLimit": 6000
+          }
+        ]
+      }
+    ]
+  }
+}
 RELAY_EOF
 }
 
 emit__adapters_codex_relay_session_start_sh() { cat <<'RELAY_EOF'
 #!/usr/bin/env bash
-# Codex SessionStart hook → emits {systemMessage:<handoff>} JSON.
+# Codex SessionStart hook → emits {hookSpecificOutput:{additionalContext:<handoff>}} JSON,
+# which Codex adds to the model's developer context. Codex sets no project-dir variable,
+# so resolve the repo root from git (the hook may run from a subdirectory).
 set -euo pipefail
-ROOT="${CODEX_PROJECT_DIR:-$PWD}"
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
 "$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex 2>/dev/null || true
 exit 0
@@ -1688,13 +1703,39 @@ PY
   fi
 }
 
+drop_legacy_codex_toml() { # older installs appended a [[hooks.SessionStart]] block Codex never ran
+  local cfg=".codex/config.toml"
+  [ -f "$cfg" ] && grep -qF "# adapters/codex/hooks.relay.toml" "$cfg" || return 0
+  awk '
+    index($0, "# adapters/codex/hooks.relay.toml") == 1 { skip = 2; next }
+    skip == 2 && $0 == "[[hooks.SessionStart]]" { skip = 1; next }
+    skip == 1 && index($0, "relay-session-start.sh") { skip = 0; next }
+    { skip = 0; print }' "$cfg" > "$cfg.relaytmp" && mv "$cfg.relaytmp" "$cfg"
+  grep -q '[^[:space:]]' "$cfg" || rm -f "$cfg"
+}
+
 wire_codex() {
   mkdir -p .codex/skills
   [ -d .relay/adapters/codex/skills ] && cp -R .relay/adapters/codex/skills/* .codex/skills/ 2>/dev/null || true
   append_block AGENTS.md .relay/adapters/codex/AGENTS.relay.md
-  local cfg=".codex/config.toml"
-  touch "$cfg"
-  grep -qF "relay-session-start.sh" "$cfg" 2>/dev/null || cat .relay/adapters/codex/hooks.relay.toml >> "$cfg"
+  drop_legacy_codex_toml
+  local hj=".codex/hooks.json" src=".relay/adapters/codex/hooks.relay.json"
+  if [ ! -f "$hj" ]; then cp "$src" "$hj"; return 0; fi
+  grep -qF "relay-session-start.sh" "$hj" && return 0    # idempotent
+  if command -v jq >/dev/null 2>&1; then
+    jq --slurpfile r "$src" '.hooks.SessionStart = ((.hooks.SessionStart // []) + $r[0].hooks.SessionStart)' \
+      "$hj" > "$hj.tmp" && mv "$hj.tmp" "$hj"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$hj" "$src" <<'PY'
+import json, sys
+p, src = sys.argv[1], sys.argv[2]
+d = json.load(open(p)); r = json.load(open(src))
+d.setdefault("hooks", {}).setdefault("SessionStart", []).extend(r["hooks"]["SessionStart"])
+json.dump(d, open(p, "w"), indent=2)
+PY
+  else
+    echo "relay: cannot auto-merge $hj; add the SessionStart entry from $src by hand" >&2
+  fi
 }
 
 wire_opencode() {
@@ -1859,5 +1900,6 @@ main() {
   for c in $selected; do labels="$labels, $(cli_label "$c")"; done
   echo "relay: installed for ${labels#, }. Handoffs will accumulate in .session-log/ (gitignored)."
   case " $selected " in *" grok "*) echo "relay: in Grok, run /hooks-trust once so the SessionStart hook can load the handoff.";; esac
+  case " $selected " in *" codex "*) echo "relay: in Codex, run /hooks once to review and trust the Relay SessionStart hook.";; esac
 }
 main "$@"

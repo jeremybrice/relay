@@ -257,7 +257,7 @@ cmd_load() {
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
   if [ "$format" = "codex" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","systemMessage":"%s"}}\n' \
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
       "$(printf '%s' "$out" | _json_escape)"
   elif [ "$format" = "grok" ]; then
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
