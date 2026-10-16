@@ -40,4 +40,7 @@ out="$("$RELAY" knowledge compact --yes --dir "$DIR")"
 assert_contains "$out" "lessons/lost"
 assert_contains "$out" "flag-only"
 assert_file "$DIR/knowledge/lessons/superseded/lost.md"
+# ...but a real multi-word body that starts with -- is knowledge, not a stray flag
+assert_file "$DIR/knowledge/facts/no-verify.md"
+[ -z "$(printf '%s' "$out" | grep -F 'facts/no-verify' || true)" ] || { echo "FAIL: compact swept a real --flag fact"; exit 1; }
 pass "knowledge add: unknown flags and split bodies rejected, '-' reads stdin, flag-only bodies swept"

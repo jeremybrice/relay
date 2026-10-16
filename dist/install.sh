@@ -611,9 +611,17 @@ _k_add_lesson() {
     seen="$(_fm "$f" seen)"; sess="$(_fm "$f" sessions)"; last="$(_fm "$f" last_seen)"
     seen=$(( ${seen:-1} + 1 ))
     [ "$last" != "$today" ] && sess=$(( ${sess:-1} + 1 ))
+    local prev=""
+    if [ "$(_squash "$(_body "$f")")" != "$(_squash "$body")" ]; then
+      # newest wording wins (as with facts); the previous text is kept, never destroyed
+      mkdir -p "$DATA/knowledge/lessons/superseded"
+      prev="$(_uniq_dest "$DATA/knowledge/lessons/superseded/$id.prev.md")"
+      cp "$f" "$prev"
+    fi
     _fm_set "$f" seen "$seen"; _fm_set "$f" sessions "$sess"; _fm_set "$f" last_seen "$today"
     _set_body "$f" "$body"
     echo "reinforced lesson: $id (seen:$seen sessions:$sess)"
+    [ -n "$prev" ] && echo "  wording updated; previous kept in lessons/superseded/$(basename "$prev")"
     if [ "$sess" -ge "$RELAY_GRADUATE_AT" ]; then
       echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): propose 'relay knowledge graduate $id'"
     fi
@@ -727,9 +735,9 @@ k_prune() {
 }
 
 _is_empty_body() { # no content, or only a stray flag token such as "--body" (an old add stored the flag as the body)
-  local b; b="$(_body "$1" | tr -d '[:space:]')"
+  local b; b="$(_squash "$(_body "$1")")"
   [ -z "$b" ] && return 0
-  printf '%s' "$b" | grep -qE '^--[a-z][a-z-]*$'
+  printf '%s' "$b" | grep -qE '^--[a-z][a-z-]*$'   # one token only: "--no-verify is banned" is real text
 }
 
 _compact_move() { # apply file dest label reason  (moved=1 propagates via bash dynamic scoping)
@@ -1082,6 +1090,8 @@ RELAY_HANDOFF
 RELAY_BODY
 ```
 
+   Restate the loaded text rather than paraphrasing it. If the lesson was listed
+   only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `$relay-learn` (skip if none). Offer
    graduation only when prompted and approved.
@@ -1305,6 +1315,8 @@ RELAY_HANDOFF
 RELAY_BODY
 ```
 
+   Restate the loaded text rather than paraphrasing it. If the lesson was listed
+   only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
    says a lesson is graduation-ready, offer graduation in one line.
@@ -1469,6 +1481,8 @@ RELAY_HANDOFF
 RELAY_BODY
 ```
 
+   Restate the loaded text rather than paraphrasing it. If the lesson was listed
+   only by id, open it first with `"$PWD/.relay/relay.sh" knowledge why <id>`.
    Re-asserting on a new day is what moves a lesson toward graduation. Do not
    re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge from this session (skip if none) with the

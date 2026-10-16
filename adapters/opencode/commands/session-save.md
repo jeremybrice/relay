@@ -29,6 +29,8 @@ RELAY_HANDOFF
 RELAY_BODY
 ```
 
+   Restate the loaded text rather than paraphrasing it. If the lesson was listed
+   only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
    says a lesson is graduation-ready, offer graduation in one line.

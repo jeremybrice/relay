@@ -33,6 +33,8 @@ RELAY_HANDOFF
 RELAY_BODY
 ```
 
+   Restate the loaded text rather than paraphrasing it. If the lesson was listed
+   only by id, open it first with `"$PWD/.relay/relay.sh" knowledge why <id>`.
    Re-asserting on a new day is what moves a lesson toward graduation. Do not
    re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge from this session (skip if none) with the

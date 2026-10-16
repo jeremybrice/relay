@@ -11,6 +11,7 @@ for f in "$SRC/skills/session-save/SKILL.md" "$SRC/codex/skills/session-save/SKI
   assert_contains "$t" "re-assert it"
   assert_contains "$t" "SAME id"
   assert_contains "$t" "Carry forward"
+  assert_contains "$t" "knowledge why <id>"
   [ -z "$(printf '%s' "$t" | grep -F "printf '%s\\n' '" || true)" ] || { echo "FAIL: $f still uses single-quoted printf"; exit 1; }
 done
 for f in "$SRC/skills/relay-learn/SKILL.md" "$SRC/codex/skills/relay-learn/SKILL.md" "$SRC/opencode/commands/relay-learn.md"; do
