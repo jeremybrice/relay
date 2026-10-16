@@ -311,7 +311,7 @@
     <div class="down">wires</div>
     <div class="row">
       <div class="node m-dur"><div class="nt">Claude Code</div><div class="nd">SessionStart hook → stdout<br>skills: session-save · relay-learn · relay-compact</div></div>
-      <div class="node m-dur"><div class="nt">Codex</div><div class="nd">SessionStart hook → systemMessage<br><code>$</code>-skills, same three</div></div>
+      <div class="node m-dur"><div class="nt">Codex</div><div class="nd">SessionStart hook → additionalContext<br><code>$</code>-skills, same three</div></div>
       <div class="node m-dur"><div class="nt">OpenCode</div><div class="nd">instructions snapshot<br>commands, same three</div></div>
       <div class="node m-dur"><div class="nt">Cursor</div><div class="nd">AGENTS.md read<br>shared skills</div></div>
       <div class="node m-dur"><div class="nt">Grok Build</div><div class="nd">SessionStart hook → systemMessage<br>shared skills</div></div>
@@ -426,11 +426,11 @@ types before touching call sites…</div>
       <tr><td><b>Question</b></td><td>"What is permanently true about this repo?"</td><td>"What have I learned about <i>how to work</i> here?"</td></tr>
       <tr><td><b>Nature</b></td><td>Reference context</td><td>Behavioral pattern (<code>when X → prefer Y, because Z</code>)</td></tr>
       <tr><td><b>Counter</b></td><td><code>confirmed: N</code></td><td><code>seen: N</code> + <code>sessions: M</code> (distinct dates)</td></tr>
-      <tr><td><b>Dedup on write</b></td><td><code>--near</code> lists the 3 closest ids. Same id + similar body (word-overlap ≥ 50%) confirms; divergent body writes a <code>.conflict</code> sidecar, never an overwrite</td><td>Same id reinforces (body refreshed); new id creates</td></tr>
+      <tr><td><b>Dedup on write</b></td><td><code>--near</code> lists the 3 closest ids. Same id + similar body (word-overlap ≥ 50%) confirms and takes the newest wording (previous kept in <code>superseded/</code>); divergent body writes a <code>.conflict</code> sidecar</td><td>Same id reinforces (body refreshed); new id creates</td></tr>
       <tr><td><b>Freshness</b></td><td><code>--ttl &lt;days&gt;</code>, default 90 days since last confirmed. Load counts expired facts; <code>prune</code> retires them</td><td>Unreinforced (<code>seen: 1</code>) lessons older than 30 days go cold on <code>compact</code></td></tr>
       <tr><td><b>Graduates</b></td><td><span class="n">Never</span></td><td><span class="y">Yes</span>, at <code>sessions ≥ 3</code>, always with your okay</td></tr>
       <tr><td><b>Retired by</b></td><td><code>resolve</code> · <code>supersede</code> · <code>prune --yes</code> · <code>compact</code> (cold)</td><td><code>supersede</code> · <code>ungraduate</code> · <code>compact</code> (cold)</td></tr>
-      <tr><td><b>Loaded at start</b></td><td>Ranked by <code>confirmed</code>, then recency, under a 400-word budget; truncation always stated</td><td>Active only, ranked by <code>seen</code>, 400-word budget. Graduated ones load via <code>AGENTS.md</code> instead</td></tr>
+      <tr><td><b>Loaded at start</b></td><td>Named by id, ranked by <code>confirmed</code> then recency; full text up to a 400-word budget, the rest listed by id</td><td>Active only, named by id, ranked by <code>seen</code> then recency, same budget rule. Graduated ones load via <code>AGENTS.md</code> instead</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -477,7 +477,7 @@ types before touching call sites…</div>
 <section id="load">
   <span class="crease-id">S-06</span>
   <h2>What the agent sees at session start</h2>
-  <p class="sub"><code>relay load</code> builds one block and prints it as plain text (Claude Code), Codex <code>hookSpecificOutput.systemMessage</code> JSON (<code>--format codex</code>), or top-level <code>systemMessage</code> JSON (<code>--format grok</code>). OpenCode reads a saved snapshot of the same output. Knowledge has its <b>own</b> word budgets, so it can never squeeze the handoff.</p>
+  <p class="sub"><code>relay load</code> builds one block and prints it as plain text (Claude Code), Codex <code>hookSpecificOutput.additionalContext</code> JSON (<code>--format codex</code>), or top-level <code>systemMessage</code> JSON (<code>--format grok</code>). OpenCode reads a saved snapshot of the same output. Knowledge has its <b>own</b> word budgets, so it can never squeeze the handoff.</p>
 
   <div class="stack">
     <div class="slot m-core"><span class="ix">01</span><div class="body"><div class="st">Recency line</div><div class="sd"><code>Last saved: 2026-10-16 (today)</code> · ⚠ flag past 3 days</div></div></div>
@@ -536,7 +536,7 @@ types before touching call sites…</div>
     <thead><tr><th style="width:16%">CLI</th><th style="width:46%">Load at session start</th><th style="width:38%">Save · learn · compact</th></tr></thead>
     <tbody>
       <tr><td><b>Claude Code</b></td><td><code>SessionStart</code> hook in <code>.claude/settings.json</code> → <code>relay load</code>; stdout is injected</td><td><code>.claude/skills/</code>: <code>/session-save</code>, <code>/relay-learn</code>, <code>/relay-compact</code></td></tr>
-      <tr><td><b>Codex</b></td><td><code>SessionStart</code> hook in <code>.codex/config.toml</code> → <code>relay load --format codex</code>; <code>AGENTS.md</code> block is the fallback</td><td><code>.codex/skills/</code>: <code>$session-save</code>, <code>$relay-learn</code>, <code>$relay-compact</code></td></tr>
+      <tr><td><b>Codex</b></td><td><code>SessionStart</code> hook in <code>.codex/hooks.json</code> (trusted once via <code>/hooks</code>) → <code>relay load --format codex</code>; <code>AGENTS.md</code> block is the fallback</td><td><code>.codex/skills/</code>: <code>$session-save</code>, <code>$relay-learn</code>, <code>$relay-compact</code></td></tr>
       <tr><td><b>OpenCode</b></td><td><code>opencode.json</code> <code>instructions</code> → <code>.session-log/relay-instructions.md</code>, a load snapshot refreshed after save and learn</td><td><code>.opencode/commands/</code>: same three</td></tr>
       <tr><td><b>Cursor</b></td><td><code>AGENTS.md</code> block: read <code>latest.md</code> and <code>index.md</code> (no hook, no knowledge block)</td><td><code>.cursor/skills/</code>: shared skills</td></tr>
       <tr><td><b>Grok Build</b></td><td><code>.grok/hooks/relay.json</code> → <code>relay load --format grok</code> after one <code>/hooks-trust</code>; <code>AGENTS.md</code> fallback</td><td><code>.grok/skills/</code>: shared skills</td></tr>
@@ -592,7 +592,7 @@ relay <span class="k">knowledge export</span>        <span class="c"># active fa
       <tr><td><code>.gitignore</code></td><td><span class="chip gold">committed</span></td><td>one <code>.session-log/</code> line under a relay marker</td></tr>
       <tr><td><code>AGENTS.md</code></td><td><span class="chip gold">committed</span></td><td>one marked block per CLI; the <code>relay:learned</code> region appears on first graduation. <b>The one local→committed path</b>: graduation names it and gates it, and you choose whether to commit.</td></tr>
       <tr><td><code>.claude/settings.json</code> · <code>.claude/skills/</code></td><td><span class="chip gold">committed</span></td><td>SessionStart hook · shared skills</td></tr>
-      <tr><td><code>.codex/config.toml</code> · <code>.codex/skills/</code></td><td><span class="chip gold">committed</span></td><td><code>[[hooks.SessionStart]]</code> · Codex skills</td></tr>
+      <tr><td><code>.codex/hooks.json</code> · <code>.codex/skills/</code></td><td><span class="chip gold">committed</span></td><td><code>SessionStart</code> hook entry · Codex skills</td></tr>
       <tr><td><code>opencode.json</code> · <code>.opencode/commands/</code></td><td><span class="chip gold">committed</span></td><td><code>instructions</code> entry · commands</td></tr>
       <tr><td><code>.cursor/skills/</code></td><td><span class="chip gold">committed</span></td><td>shared skills</td></tr>
       <tr><td><code>.grok/hooks/relay.json</code> · <code>.grok/skills/</code></td><td><span class="chip gold">committed</span></td><td>SessionStart hook · shared skills</td></tr>

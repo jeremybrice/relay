@@ -105,6 +105,7 @@ the data is fully readable with no adapter at all (it is just markdown).
 .session-log/              # the DATA, gitignored, local-only, per-repo (§11)
   latest.md                # newest single-session handoff (frontmatter + 6 sections)
   index.md                 # Markdown table, one row per day, ≤ 10 days
+  .relay-format            # data layout version (2); see below
   .lock/                   # present only while a write holds the lock (§10)
   relay-instructions.md    # OpenCode only: load snapshot refreshed on save
   history/
@@ -112,6 +113,12 @@ the data is fully readable with no adapter at all (it is just markdown).
     …                      # 10 most recent dated files; older pruned
   knowledge/               # durable tier, never pruned (see the learning design)
 ```
+
+`.relay-format` holds the data layout version (currently `2`, table indexes).
+Every locked write stamps it when it is missing, unreadable, or older. If it
+names a newer version than the running `relay.sh`, every locked write refuses
+(exit 1, pointing at `install.sh --detect`) and load prepends a warning, so an
+out-of-date copy of the tool can never rewrite a newer store.
 
 A handoff is YAML frontmatter (written by `relay.sh`, carried in `latest.md` too)
 plus six fixed sections authored by the agent:
@@ -198,14 +205,16 @@ covered in the learning design.
    (`⚠ Last saved: 2026-06-11 — 9 days ago`).
 2. **`latest.md` in full**, soft-capped at 800 words (`RELAY_WORD_CAP`), with a
    truncation note pointing at the file if the cap is hit.
-3. **Durable knowledge**: facts and active lessons, under their own word budgets
-   so they cannot crowd out the handoff. Truncation is always stated.
+3. **Durable knowledge**: facts and active lessons, every entry named by its id.
+   The top-ranked entries appear in full under their own word budgets (so they
+   cannot crowd out the handoff); the rest are listed by id in one `More` line.
+   Truncation is always stated.
 4. **`index.md` verbatim**: the dated ≤ 10-day map.
 5. A closing pointer: the handoff and index are summaries; if the task touches
    an earlier day in the index, open `.session-log/history/<date>.md` first.
 
 Output format follows the CLI: plain text (`--format text`, the default), a
-Codex `hookSpecificOutput.systemMessage` JSON object (`--format codex`), or a
+Codex `hookSpecificOutput.additionalContext` JSON object (`--format codex`), or a
 top-level `systemMessage` JSON object (`--format grok`).
 
 Load **never blocks**: with no `latest.md` it prints nothing and exits cleanly,
@@ -228,7 +237,7 @@ location differ. All five append their instruction block to `AGENTS.md`, between
 | CLI | Load at session start | Save / learn / compact |
 |---|---|---|
 | **Claude Code** | `SessionStart` hook in `.claude/settings.json` runs `relay load`; stdout is injected | `.claude/skills/` (shared skill set): `/session-save`, `/relay-learn`, `/relay-compact` |
-| **Codex** | `SessionStart` hook in `.codex/config.toml` runs `relay load --format codex` (`systemMessage`); `AGENTS.md` block is the fallback | `.codex/skills/`: `$session-save`, `$relay-learn`, `$relay-compact` |
+| **Codex** | `SessionStart` hook in `.codex/hooks.json` runs `relay load --format codex` (`additionalContext`, limit raised to 6000; trusted once via `/hooks`); `AGENTS.md` block is the fallback | `.codex/skills/`: `$session-save`, `$relay-learn`, `$relay-compact` |
 | **OpenCode** | `opencode.json` `instructions` points at `.session-log/relay-instructions.md`, a `relay load` snapshot refreshed by save and learn | `.opencode/commands/`: `/session-save`, `/relay-learn`, `/relay-compact` |
 | **Cursor** | `AGENTS.md` block tells the agent to read `latest.md` and `index.md` (no hook) | `.cursor/skills/` (shared skill set) |
 | **Grok Build** | `.grok/hooks/relay.json` runs `relay load --format grok` after a one-time `/hooks-trust`; `AGENTS.md` block is the fallback | `.grok/skills/` (shared skill set) |
@@ -310,6 +319,9 @@ the rest of `CLAUDE.md` untouched.
   seconds, then fails with a clear message rather than writing unlocked.
 - **Prune** is best-effort; a failure leaves extra history rather than crashing.
 - **Install** is additive and marker-delimited, so it can be reversed by hand.
+- **Knowledge add** rejects unknown options and more than one body argument
+  (exit 2, nothing written). A store with a newer `.relay-format` makes every
+  locked write exit 1.
 
 ## 14. Testing
 
@@ -358,6 +370,11 @@ descriptive and brand-neutral.
   `install.sh`**.
 
 ## 17. Future
+
+- **Curation freeze.** No new knowledge subcommands until re-assertion is
+  visible in real stores: at least one lesson in some install reaching
+  `sessions: 2` by re-assertion of a loaded id. Check by listing `sessions:`
+  across installs.
 
 - **L3 hook-automatic save:** a `SessionEnd` (Claude Code) / `Stop` (Codex) hook
   that writes the handoff from the session transcript when L1 and L2 did not

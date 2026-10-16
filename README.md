@@ -75,7 +75,7 @@ task touches work from an earlier day, it should open that day's
 | CLI | Load at session start | Save / learn / compact |
 |-----|-----------------------|------------------------|
 | Claude Code | `SessionStart` hook in `.claude/settings.json` + `AGENTS.md` block | `.claude/skills/` → `/session-save`, `/relay-learn`, `/relay-compact` |
-| Codex | `SessionStart` hook in `.codex/config.toml` + `AGENTS.md` fallback | `.codex/skills/` → `$session-save`, `$relay-learn`, `$relay-compact` |
+| Codex | `SessionStart` hook in `.codex/hooks.json` (run `/hooks` once to trust it) + `AGENTS.md` fallback | `.codex/skills/` → `$session-save`, `$relay-learn`, `$relay-compact` |
 | OpenCode | `instructions` snapshot in `opencode.json` | `.opencode/commands/` → `/session-save`, `/relay-learn`, `/relay-compact` |
 | Cursor | `AGENTS.md` block (reads `.session-log/latest.md` + `index.md`) | `.cursor/skills/` → `session-save`, `relay-learn`, `relay-compact` |
 | Grok Build | `.grok/hooks/relay.json` (run `/hooks-trust` once) + `AGENTS.md` block | `.grok/skills/` → `session-save`, `relay-learn`, `relay-compact` |
@@ -103,12 +103,17 @@ Then commit the updated `.relay/` so other machines pick it up.
 Update before the next save after the index switched to tables: an older
 `relay.sh` keeps only the old one-line index entries and would drop the table rows.
 
+From this version on, `.session-log/.relay-format` records the data layout. A
+`relay.sh` older than the data refuses to write and tells you to update, instead
+of mangling the files.
+
 ## Use
 
 - **Load** is automatic: the last handoff, active knowledge, and the index are
-  injected at session start. Knowledge loads under its own budget so it can't
-  crowd out the handoff, and any truncation is stated explicitly (e.g.
-  `⚠ 14 of 31 facts shown`) — never silent.
+  injected at session start. Every knowledge entry is named by its id. The
+  top-ranked entries appear in full under their own word budget (so knowledge
+  can't crowd out the handoff), and the rest are listed by id
+  (`relay knowledge why <id>` opens one), so nothing is silently dropped.
 - **Save** with `/session-save` (Claude Code) or `$session-save` (Codex) — or the
   agent offers when you wrap up. One reflection routes into three destinations:
   the handoff, any new facts, and any new/reinforced lessons.
@@ -125,7 +130,8 @@ can harden into rules.
   (reinforcement proxy) and an optional `ttl` for freshness. On a divergent
   rewrite they raise a **conflict** rather than silently overwriting — you pick a
   side with `resolve --keep new|existing` (defaults to keeping the existing fact).
-  Facts **never graduate**.
+  Restating a fact in similar words updates it to the newest wording and keeps
+  the previous version in `facts/superseded/`. Facts **never graduate**.
 - **Lessons** — behavioral patterns (*when X → prefer Y, because Z*). Carry a
   `seen` count plus a `sessions` count of **distinct dates**. Lessons can
   graduate.
@@ -157,9 +163,13 @@ Every write is a `relay.sh` subcommand:
 relay knowledge add --fact   --near "…"          # show matching ids, write nothing
 relay knowledge add --fact   --id <slug> "…"     # create / confirm / or raise conflict
 relay knowledge add --lesson --id <slug> "…"     # create / bump seen + sessions
+relay knowledge add --fact --id <slug> - <<'EOF' # body on stdin (quote-safe)
 relay knowledge graduate <id>                    # write a reinforced lesson into the
                                                  #   instruction file (gated)
 ```
+
+`knowledge add` rejects unknown options and more than one body argument, so a
+mistyped flag or an unquoted body can never be stored in place of the text.
 
 Curation verbs round out the surface — `resolve --keep new|existing` (settle a
 conflict), `supersede <id>` (retire an entry), `prune --yes` (retire stale facts),
@@ -189,6 +199,7 @@ drops the machinery a dogfood repo won't have:
 .session-log/        git-ignored · local-only
   latest.md          newest single-session handoff
   index.md           table, one row per day, ≤ 10 days
+  .relay-format      data layout version (an older relay.sh refuses to write)
   history/           one file per day, last 10 (older pruned)
   knowledge/         durable, never pruned
     index.md         derived cache — rebuilt from entry files every locked op
