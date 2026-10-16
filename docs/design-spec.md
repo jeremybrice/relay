@@ -1,13 +1,14 @@
-# Relay — Portable Session Handoff: Design Spec
+# Relay: Portable Session Handoff, Design Spec
 
-- **Date:** 2026-06-19 (revised 2026-06-20)
-- **Status:** Draft — final review before the implementation plan
+- **Date:** 2026-06-19 (revised 2026-06-20; synced to the shipped code 2026-10-16)
+- **Status:** Implemented. This spec describes the handoff tier as it ships today.
 - **Author:** Jeremy Brice (with Claude)
-- **Type:** New capability — portable, cross-harness, local-only
+- **Type:** Portable, cross-harness, local-only capability
 - **Relates to:** Extraction of the generic handoff core from the Forge
   session-lifecycle system (`hooks/session-start.sh` `session_state` block,
-  `.forge/session-log/`, `/session-save`). Strategic wedge for a later
-  learning-system export — that larger effort is **out of scope** here.
+  `.forge/session-log/`, `/session-save`). The durable knowledge tier (facts,
+  lessons, graduation) shipped on top of this core and is documented in
+  [`relay-learning-design.html`](relay-learning-design.html).
 
 ---
 
@@ -17,98 +18,103 @@ An agent starting a fresh session in a repo has no memory of what the last
 session did. Work restarts cold: the agent re-derives context, re-discovers where
 things were left, and often asks "what were we working on?" instead of continuing.
 
-The Forge workspace already solves this for itself — a daily handoff file, a
+The Forge workspace already solved this for itself with a daily handoff file, a
 rolling 10-day history, and a SessionStart hook that auto-loads the last handoff.
-But that implementation is welded to Forge (it loads Forge tasks, taxonomy,
-initiatives, review queues, and mines org-memory on save). None of that transfers.
+That implementation is welded to Forge (Forge tasks, taxonomy, initiatives,
+review queues, org-memory mining on save). None of that transfers.
 
 **Relay** extracts the generic handoff core and makes it portable: drop it into
-any repo — yours, a teammate's, a non-Forge codebase — and agents hand off to each
-other day to day across a rolling 10-day window, regardless of whether the agent
-runs in Claude Code or Codex, with the handoff data kept strictly local to that repo.
+any repo and agents hand off to each other day to day across a rolling 10-day
+window, whichever CLI they run in, with the handoff data kept strictly local to
+that repo.
 
 ## 2. Goals
 
 - A fresh agent session **orients from the last handoff automatically**.
-- Continuity across a **rolling 10-day window**: full last session + cheap
+- Continuity across a **rolling 10-day window**: full last session plus cheap
   awareness of prior days, detail on demand.
-- **Portable across Claude Code and Codex** via a harness-agnostic core + thin adapters.
-- **Installable into any repo** with one idempotent command.
-- **Reliable under multiple agents** working the same repo — multi-*agent*, not
-  multi-device — via file locking.
+- **Portable across CLIs** via a harness-agnostic core and thin adapters. Five
+  ship today: Claude Code, Codex, OpenCode, Cursor, Grok Build.
+- **Installable into any repo** with one idempotent command, which is also the
+  update path.
+- **Reliable under multiple agents** working the same repo (multi-agent, not
+  multi-device) via a lock.
 - Handoffs are **substantive, not placeholder**.
 - **Local to each repo:** handoff data never leaves the machine.
 
-## 3. Non-goals (explicitly out of scope for v1)
+## 3. Non-goals
 
-- The larger learning-system export (observation capture, instinct distillation,
-  promotion). Relay is the distribution wedge for it, not that system.
-- **Hook-automatic save (L3)** — a `SessionEnd`/`Stop` agent-hook that writes the
-  handoff with no user or agent action. Deferred to v2 (needs a viability spike).
-  v1 triggers are **L1 + L2 only** (§6).
-- **Multi-device / cloud sync of handoff data.** Relay is deliberately local-only
-  and per-repo (§11).
+- **Hook-automatic save (L3):** a `SessionEnd` / `Stop` hook that writes the
+  handoff with no user or agent action. Deferred (needs a viability spike).
+  Saves are **L1 + L2 only** (§6).
+- **Multi-device or cloud sync of handoff data.** Relay is deliberately
+  local-only and per-repo (§11).
 - The Forge-specific load sources (tasks, taxonomy, initiatives, reviews) and the
-  org-memory mining in `/session-save`.
+  org-memory mining in Forge's `/session-save`.
 - Hook profiles (`minimal` / `standard` / `strict`). Relay has one behavior.
-- An adapter for harnesses beyond Claude Code and Codex.
-- Crash-recovery `git diff` auto-stub for hard kills (§17, v2).
+- Crash-recovery `git diff` auto-stub for hard kills (§17).
+- Native Windows. The scripts need Git Bash or WSL.
 
-## 4. Architecture — three units + a deterministic helper
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ Installer   detect harness(es) · lay down Core · wire Adapter(s)   │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-     ┌────────────────────────┴───────────────────────┐
-     ▼                                                 ▼
-┌──────────────────┐                       ┌────────────────────────────┐
-│ Adapter (CC)     │   Adapter (Codex)     │ Core                       │
-│ SessionStart hook │  SessionStart hook    │  relay.sh  (load/save/     │
-│ + /session-save   │  + $session-save      │            rotate/prune/   │
-│                   │                       │            lock)           │
-└──────────────────┘                       │  .session-log/ (data)      │
-                                            └────────────────────────────┘
-```
-
-- **Core** *(harness-agnostic)* — the `.session-log/` data folder plus a
-  **deterministic helper script `relay.sh`** that performs *every* file operation
-  (load, save, rotate, prune) under a lock. The Core knows nothing about Claude
-  Code or Codex.
-- **Adapters** *(thin, per-harness)* — wire the Core's two operations
-  (`relay load`, `relay save`) into a harness's native trigger points. Two ship
-  in v1: Claude Code and Codex.
-- **Installer** — a single embedded `install.sh` (§12) that detects the
-  harness(es), lays down the Core, copies the adapter(s), wires them, and
-  gitignores the data.
-
-**Division of labor (the load-bearing principle):** the agent *only* authors the
-six sections + a one-line digest. Every byte-level operation — write, append,
-rotate, prune, and the lock — is done by `relay.sh` deterministically.
-Pruning-to-10 and correct appends are never left to LLM judgment. This makes the
-behavior testable and the lock enforceable.
-
-**Boundary invariant:** an Adapter can be swapped without touching the Core, and
-the data is fully readable with no Adapter at all (it is just markdown).
-
-## 5. Core — layout & file schema
+## 4. Architecture: installer, adapters, core
 
 ```
-.relay/                  # the TOOL — committed (travels via git to other repos/people)
-  relay.sh               # deterministic helper: load | save | rotate | prune | lock
-  adapters/              # adapter templates the installer wires from
+┌─────────────────────────────────────────────────────────────────────┐
+│ Installer  pick CLIs · lay down .relay/ · wire adapters · gitignore │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+   ┌──────────────┬──────────────┼──────────────┬──────────────┐
+   ▼              ▼              ▼              ▼              ▼
+ Claude Code    Codex          OpenCode       Cursor         Grok Build
+ hook+skills    hook+skills    snapshot+cmds  AGENTS+skills  hook+skills
+   └──────────────┴──────────────┼──────────────┴──────────────┘
+                                  ▼
+            ┌───────────────────────────────────────────┐
+            │ Core: .relay/relay.sh                     │
+            │   load · save · knowledge …  (one lock)   │
+            │ Data: .session-log/  (plain markdown)     │
+            └───────────────────────────────────────────┘
+```
 
-.session-log/            # the DATA — gitignored, local-only, per-repo (§11)
-  latest.md              # newest single-session handoff (frontmatter + 6 sections)
-  index.md               # one line per day, ≤10 days
-  .lock                  # advisory lock file (flock)
+- **Core** (harness-agnostic): the `.session-log/` data folder plus the
+  deterministic helper `relay.sh`, which performs every file operation (append,
+  overwrite, index rebuild, prune) under a lock. The core knows nothing about
+  any CLI.
+- **Adapters** (thin, per CLI): wire `relay load` into the CLI's session-start
+  surface and expose `session-save`, `relay-learn`, and `relay-compact` as that
+  CLI's commands or skills. Each adapter also adds one labeled block to
+  `AGENTS.md`.
+- **Installer:** `install.sh` asks which CLIs to wire, lays down the core,
+  copies and wires the adapters, and gitignores the data (§12).
+
+**Division of labor (the load-bearing principle):** the agent only authors the
+six sections and a one-line digest. Every byte-level operation is done by
+`relay.sh` deterministically. Pruning to 10 and correct appends are never left
+to LLM judgment, which makes the behavior testable and the lock enforceable.
+
+**Boundary invariant:** an adapter can be swapped without touching the core, and
+the data is fully readable with no adapter at all (it is just markdown).
+
+## 5. Core: layout and file schema
+
+```
+.relay/                    # the TOOL, committed (travels via git)
+  relay.sh                 # deterministic helper: load | save | knowledge …
+  adapters/                # templates the installer wires from
+  tests/smoke-compact.sh   # contract test for knowledge compact / restore
+
+.session-log/              # the DATA, gitignored, local-only, per-repo (§11)
+  latest.md                # newest single-session handoff (frontmatter + 6 sections)
+  index.md                 # Markdown table, one row per day, ≤ 10 days
+  .lock/                   # present only while a write holds the lock (§10)
+  relay-instructions.md    # OpenCode only: load snapshot refreshed on save
   history/
-    2026-06-20.md        # one file per calendar day; same-day sessions appended
-    …                    # last 10 dated files; older pruned
+    2026-06-20.md          # one file per calendar day; same-day sessions appended
+    …                      # 10 most recent dated files; older pruned
+  knowledge/               # durable tier, never pruned (see the learning design)
 ```
 
-A handoff is YAML frontmatter (carried in `latest.md` too) plus six fixed sections:
+A handoff is YAML frontmatter (written by `relay.sh`, carried in `latest.md` too)
+plus six fixed sections authored by the agent:
 
 ```markdown
 ---
@@ -117,18 +123,18 @@ session: 2          # nth session on this date
 digest: "Extracted handoff core; chose deterministic script + locking"
 ---
 
-## Summary        # 2–3 sentences: what this session set out to do, how far it got
-## Changed        # files / areas touched, with paths — the "where to look" map
-## Decisions      # choices made + one-line rationale each
-## Next           # explicit, ordered next steps — the most load-bearing section
+## Summary        # 2 to 3 sentences: what this session set out to do, how far it got
+## Changed        # files and areas touched, with paths: the "where to look" map
+## Decisions      # choices made, one-line rationale each
+## Next           # explicit, ordered next steps: the most load-bearing section
 ## Watch out      # blockers, gotchas, half-finished edges
 ## Open questions # unresolved threads for the next agent
 ```
 
-`index.md` is a table with **one row per day** (the day's most-recent digest),
-newest first, columns padded so it reads cleanly raw or rendered. Pipes and line
-breaks in a digest are flattened in the index only (the history file keeps the
-original). There is no separate index database to keep in sync:
+`index.md` is a table with **one row per day** (that day's most recent digest),
+newest first, columns padded so it reads cleanly raw or rendered. Pipes, tabs,
+and line breaks in a digest are flattened in the index only; the history file
+keeps the original. There is no separate database to keep in sync:
 
 ```markdown
 # Session index (last 10 days)
@@ -139,201 +145,228 @@ original). There is no separate index database to keep in sync:
 | 2026-06-19 | …                                                            | [2026-06-19](history/2026-06-19.md) |
 ```
 
-A legacy line-format index (`- date — digest → history/date.md`) is migrated to
-the table on the next save.
+A legacy line-format index (`- date — digest → history/date.md`) is read and
+migrated to the table on the next save. An older `relay.sh` that predates the
+table format drops table rows on save, so repos must update (§12) before saving.
 
 ## 6. Save operation
 
-### Triggering (v1 = L1 + L2)
+### Triggering (L1 + L2)
 
 The save is agent-invoked, two ways:
 
-- **L1 — Explicit.** The user runs `/session-save` (Claude Code) or `$session-save`
-  (Codex). Highest fidelity — the agent writes from full in-context memory.
-- **L2 — Agent-prompted.** The adapter instructs the agent to *offer* a save (one
-  line) on ambiguous wrap-up cues, and to save outright on an explicit signal
-  ("done for today" / "let's continue tomorrow").
+- **L1, explicit.** The user runs the `session-save` command or skill
+  (`/session-save` in Claude Code and OpenCode, `$session-save` in Codex, the
+  `session-save` skill in Cursor and Grok). Highest fidelity: the agent writes
+  from full in-context memory.
+- **L2, agent-prompted.** The adapter's `AGENTS.md` block tells the agent to save
+  on an explicit signal ("done for today", "let's continue tomorrow") and to
+  offer a save in one line when unsure the session is ending.
 
-Hook-automatic save (L3) is deferred to v2 (§3, §17). v1 reliability rests on
-L1 + L2: if neither fires before a hard exit, that one session's handoff is lost.
+If neither fires before a hard exit, that one session's handoff is lost.
 
 ### Behavior (deterministic, via `relay save`)
 
-The agent authors the six sections + the digest, then calls `relay save`. The
-script, **holding the lock** (§10):
+The agent pipes the six sections on stdin and passes the digest:
 
-1. Append to `history/<today>.md` after a `## Session N` separator
-   (N = existing sessions + 1), or create it as session 1.
-2. Overwrite `latest.md` with **this session's** handoff (not the whole day).
-3. Update **today's** line in `index.md` (replace it if present, else prepend);
-   keep ≤10 day-lines.
-4. Prune `history/` to the **10 most-recent dated files**.
+```bash
+printf '%s\n' '<six sections>' \
+  | .relay/relay.sh save --dir .session-log --digest '<one-line digest>'
+```
 
-Best-effort: a missing `.session-log/` is created on the fly; the save never
-fails the session.
+`relay.sh` reads stdin first (authoring is lock-free), then, **holding the lock**
+(§10):
+
+1. Counts the sessions already in `history/<today>.md` and stamps frontmatter
+   with `session: N+1`. Appends the handoff after a `---` rule, or creates the
+   file as session 1.
+2. Overwrites `latest.md` with **this session's** handoff (not the whole day).
+3. Rebuilds `index.md`: puts today's row first (dropping any earlier row for
+   today), keeps ≤ 10 rows.
+4. Prunes `history/` to the **10 most recent dated files**.
+
+A missing `.session-log/` is created on the fly. After the handoff, the save
+skill goes on to capture durable knowledge (facts and lessons); that half is
+covered in the learning design.
 
 ## 7. Load operation (automatic at session start)
 
-Both adapters fire a SessionStart hook that calls `relay load`, which emits:
+`relay load` emits, in order:
 
-- A **recency line** — `Last saved: 2026-06-20 (today)`, or a ⚠ flag when
-  `latest.md` is older than ~3 days (`⚠ Last saved 2026-06-11 — 9 days ago`).
-  This satisfies the `outcome-validation-hooks` staleness scenario.
-- **`latest.md` in full**, soft-capped at ~800 words (a truncation note appended
-  if the cap is hit).
-- **`index.md` verbatim** — the dated ≤10-day map.
-- A one-line note that the agent may open any `history/<date>.md` on demand.
+1. A **recency line**: `Last saved: 2026-06-20 (today)`,
+   `Last saved: 2026-06-18 (2 day(s) ago)`, or a ⚠ flag past 3 days
+   (`⚠ Last saved: 2026-06-11 — 9 days ago`).
+2. **`latest.md` in full**, soft-capped at 800 words (`RELAY_WORD_CAP`), with a
+   truncation note pointing at the file if the cap is hit.
+3. **Durable knowledge**: facts and active lessons, under their own word budgets
+   so they cannot crowd out the handoff. Truncation is always stated.
+4. **`index.md` verbatim**: the dated ≤ 10-day map.
+5. A closing pointer: the handoff and index are summaries; if the task touches
+   an earlier day in the index, open `.session-log/history/<date>.md` first.
 
-Load **never blocks** session start; missing files are skipped silently.
+Output format follows the CLI: plain text (`--format text`, the default), a
+Codex `hookSpecificOutput.systemMessage` JSON object (`--format codex`), or a
+top-level `systemMessage` JSON object (`--format grok`).
+
+Load **never blocks**: with no `latest.md` it prints nothing and exits cleanly,
+and the hook wrappers swallow errors.
 
 ## 8. Rolling-window mechanics
 
-- The unit is the **dated daily file**; the window is the **10 most-recent dated
-  files** — calendar gaps (weekends) do not shrink it.
-- The 11th distinct day prunes the oldest file and its `index.md` line.
+- The unit is the **dated daily file**; the window is the **10 most recent dated
+  files**. Calendar gaps (weekends) do not shrink it.
+- The 11th distinct day prunes the oldest file and its index row.
 - Same-day sessions **append** to that day's file; `latest.md` reflects the most
-  recent single session; `index.md` holds exactly one line for the day.
+  recent single session; `index.md` holds exactly one row per day.
 
-## 9. Cross-harness adapters (symmetric)
+## 9. Cross-CLI adapters
 
-Both adapters call the same `relay.sh`; only the trigger wiring and the
-context-injection field differ.
+Every adapter calls the same `relay.sh`; only the load surface and the command
+location differ. All five append their instruction block to `AGENTS.md`, between
+`# >>> relay >>>` and `# <<< relay <<<` markers.
 
-| Operation | Claude Code | Codex |
+| CLI | Load at session start | Save / learn / compact |
 |---|---|---|
-| **Load** | `SessionStart` hook → `relay load`; output injected via `additionalContext` | `SessionStart` hook → `relay load`; output injected via `systemMessage` |
-| **Save L1** | `/session-save` command → `relay save` | `$session-save` skill → `relay save` |
-| **Save L2** | agent-prompt instruction (CLAUDE.md / skill) | agent-prompt instruction (AGENTS.md) |
-| **Hook config** | `.claude/settings.json` | `.codex/config.toml` `[hooks]` |
+| **Claude Code** | `SessionStart` hook in `.claude/settings.json` runs `relay load`; stdout is injected | `.claude/skills/` (shared skill set): `/session-save`, `/relay-learn`, `/relay-compact` |
+| **Codex** | `SessionStart` hook in `.codex/config.toml` runs `relay load --format codex` (`systemMessage`); `AGENTS.md` block is the fallback | `.codex/skills/`: `$session-save`, `$relay-learn`, `$relay-compact` |
+| **OpenCode** | `opencode.json` `instructions` points at `.session-log/relay-instructions.md`, a `relay load` snapshot refreshed by save and learn | `.opencode/commands/`: `/session-save`, `/relay-learn`, `/relay-compact` |
+| **Cursor** | `AGENTS.md` block tells the agent to read `latest.md` and `index.md` (no hook) | `.cursor/skills/` (shared skill set) |
+| **Grok Build** | `.grok/hooks/relay.json` runs `relay load --format grok` after a one-time `/hooks-trust`; `AGENTS.md` block is the fallback | `.grok/skills/` (shared skill set) |
 
-Verified against Codex's official docs: Codex has a real `SessionStart` hook (can
-inject via `systemMessage`), first-class `$`-invoked skills, and `config.toml`
-hooks. **Residual smoke-test (build-time):** confirm Codex's `systemMessage`
-reaches *model* context, not just the UI; if it doesn't, Codex's auto-injected
-`AGENTS.md` instruction-chain is the guaranteed fallback for load.
+Claude Code, Cursor, and Grok share one skill set (`adapters/skills/`). Codex and
+OpenCode carry their own copies because their command formats differ. Cursor and
+OpenCode do not run `relay load` live, so on Cursor the agent sees the handoff
+and index but not the knowledge block.
 
-## 10. Concurrency & locking
+## 10. Concurrency and locking
 
-For multiple agents working the same repo simultaneously:
+For multiple agents working the same repo at once:
 
-- `relay.sh` wraps its **file-mutation critical section** in an advisory lock
-  (`flock` on `.session-log/.lock`).
-- **Authoring happens before the lock.** The lock covers only the brief
-  write/rotate/prune, so a concurrent saver waits only for that — not for the
-  other agent's thinking.
-- **Wait-your-turn:** the first saver acquires the lock; a concurrent saver
-  blocks until release, then proceeds.
-- `flock` releases automatically when the holding process exits, so a crashed
-  agent cannot wedge the lock (no stale-lock cleanup needed). A bounded wait
-  (`flock -w <seconds>`) prevents an indefinite block.
+- `relay.sh` wraps every file mutation in a **portable `mkdir` lock** on
+  `.session-log/.lock/` (no `flock`, so it works on stock macOS). The lock
+  directory holds an `info` file with the holder's PID and start time.
+- **Authoring happens before the lock.** `save` reads stdin first, so a
+  concurrent saver waits only for the brief write, not for the other agent's
+  thinking.
+- **Wait your turn:** a second writer polls once a second and proceeds when the
+  lock is released.
+- **No wedged locks:** a lock whose holder PID is gone, or which is older than
+  30 seconds (`RELAY_LOCK_TIMEOUT`), is reclaimed. A writer that waits longer
+  than 30 seconds gives up with `relay: lock wait timeout`. The lock is also
+  released on exit via a trap.
 
-## 11. Storage & git
+## 11. Storage and git
 
 - **`.session-log/` (the data) is gitignored, local-only, per-repo.** The
   installer adds it to `.gitignore`. Handoffs never go to git or any cloud.
-- **The Relay tool (`.relay/`, adapter hooks/skills, config wiring) IS committed**
-  — that is how the tool travels to other repos and people; each environment then
-  generates its own local handoffs.
-- Git worktrees each get their own `.session-log/` (local to that working dir).
-- **Forward note (v2):** handoffs are designed to later reconcile against each
-  agent's own local action-memories — keeping the data local serves that future
-  alignment.
+- **The tool is committed:** `.relay/`, the per-CLI skills, commands, and hook
+  config, and the `AGENTS.md` blocks. That is how Relay travels to other repos,
+  machines, and people; each checkout then generates its own local handoffs.
+- Git worktrees each get their own `.session-log/`.
+- The one path from local data into a committed file is a **graduated lesson**,
+  which the user approves (see the learning design).
 
-## 12. Installer & distribution
+## 12. Installer and distribution
 
 ### The transfer package
 
-The deliverable is a **single self-contained `install.sh`** — the canonical
-`relay.sh` and the adapter templates are embedded inside it as heredocs, so it is
-one file with no external fetch at install time.
+The deliverable is a **single self-contained `dist/install.sh`**: `relay.sh`, the
+adapters, and the smoke test are embedded as heredocs, so it needs no fetch at
+install time.
 
-- **Source vs deliverable:** Relay develops in its own small git repo (readable
-  `relay.sh`, adapter templates, tests). A release step concatenates those sources
-  into the bundled `install.sh`; that bundled file is the artifact you share.
-- **How it travels:** run `curl -fsSL <url>/install.sh | bash` from the target
-  repo's root, **or** hand someone the file to read and run with `bash install.sh`
-  — offline / air-gapped friendly, and readable before running (no blind
-  `curl | bash` trust required).
-- **Updates:** re-run the installer; it is idempotent.
-- **Not in v1:** no npm/Node wrapper and no Claude Code plugin channel (both are
-  v2 conveniences — §17). One harness-neutral artifact serves both harnesses.
+- **Source vs deliverable:** the repo holds readable sources (`relay.sh`,
+  `install.sh`, `adapters/`, `tests/`). `bash bundle.sh` concatenates them into
+  `dist/install.sh`. CI fails if the bundle is out of date with the sources.
+- **How it travels:**
+  `curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash`
+  from the target repo's root, or download it, read it, and run `bash install.sh`.
+  A local clone can run the source `install.sh` directly.
+- **Updates:** there is no separate update command. Re-run the installer with
+  `--detect`; it replaces `.relay/`, rewrites each `AGENTS.md` block in place, and
+  leaves `.session-log/` alone. Then commit `.relay/`.
 
 ### Install behavior
 
-A bash `install.sh`:
-
-1. **Detect** `.claude/` and/or `.codex/`. If **both** are present, install
-   **both** adapters over one shared Core. If neither, ask the user or skip.
-2. **Lay down** `.relay/` (the tool) and the `.session-log/` skeleton (data).
-3. **Wire** — CC hook into `.claude/settings.json`; Codex hook into
-   `.codex/config.toml`. Both are committed.
+1. **Choose CLIs.** With a terminal and no flags, a picker lists the five CLIs
+   with any already present in the repo pre-checked. `--clis claude,codex,…`
+   skips the prompt; `--detect` (and any run without a terminal) wires only the
+   CLIs already present.
+2. **Lay down** `.relay/` (the tool) and the `.session-log/history/` skeleton.
+3. **Wire** each chosen CLI (§9). JSON configs are merged with `jq`, falling back
+   to `python3`, falling back to printing the entry for a manual merge.
 4. **Gitignore** `.session-log/`.
 
-Discipline, per existing repo rules: **idempotent** (checks its own marker before
-appending; running twice produces no duplicate wiring) and **precondition-gated**
-(skips cleanly with a message if no harness is detected). Windows requires Git
-Bash / WSL for the bash script — a noted v1 limitation.
+The installer is **additive and idempotent**: each `AGENTS.md` block is keyed by
+its header line and replaced in place on re-run; hook entries are skipped if
+already present. Re-installing over an older install moves Claude Code's block
+out of `CLAUDE.md` into `AGENTS.md` and removes legacy command files, leaving
+the rest of `CLAUDE.md` untouched.
 
 ## 13. Error handling
 
-- **Load** never blocks; absent files are skipped; the stale flag is surfaced, not fatal.
-- **Save** self-heals a missing directory; lock contention waits (bounded by `-w`);
-  never throws into the session.
+- **Load** never blocks; absent files are skipped; the stale flag is surfaced,
+  not fatal.
+- **Save** self-heals a missing directory; lock contention waits up to 30
+  seconds, then fails with a clear message rather than writing unlocked.
 - **Prune** is best-effort; a failure leaves extra history rather than crashing.
-- **Install** is reversible (additive files + a marked config block) and refuses
-  to half-wire.
+- **Install** is additive and marker-delimited, so it can be reversed by hand.
 
-## 14. Testing strategy
+## 14. Testing
 
-- **Lifecycle (script)** — 11 days of `relay save` → `history/` caps at 10 files,
-  `index.md` = 10 day-lines, oldest pruned, `latest.md` = newest, and a same-day
-  re-save **replaces** the day's index line (no duplicate).
-- **Concurrency** — two `relay save` runs in parallel → both complete, no clobber,
-  serialized by the lock.
-- **Orientation** (`outcome-validation-hooks`) — a filled handoff clears ≥1 named
-  file/path, ≥1 dated fact, ≥1 real entity, ≥100 words of body.
-- **Staleness** — `relay load` on a 9-day-old `latest.md` surfaces the ⚠ flag.
-- **Idempotency** — installer twice → no duplicate wiring.
-- **Trigger-wiring** — each adapter carries L1 (skill/command → `relay save`) and
-  the L2 agent-prompt instruction.
-- **Codex smoke-test** — SessionStart `systemMessage` reaches model context; else
-  the AGENTS.md fallback is exercised.
+The suite runs with `bash tests/run.sh` plus `bash tests/smoke-compact.sh`. CI
+(`.github/workflows/tests.yml`) runs both on Ubuntu and macOS for pull requests
+and pushes to `main`. Coverage includes:
+
+- **Lifecycle:** 11 days of saves cap `history/` at 10 files and the index at 10
+  rows; same-day saves append and replace the day's row.
+- **Index tables:** padded table output, legacy line migration, digest flattening.
+- **Concurrency:** parallel saves serialize under the lock with no clobber.
+- **Staleness:** a 9-day-old `latest.md` surfaces the ⚠ flag.
+- **Install:** idempotency, CLI picker, `--detect`, upgrade over older installs,
+  and per-adapter wiring for all five CLIs.
+- **Bundle:** `dist/install.sh` matches the sources.
+- **Knowledge:** add, conflict, resolve, graduate, ungraduate, prune, compact,
+  restore, and load caps.
 
 ## 15. Naming
 
-Working name **Relay** (agents relay the baton). Data dir `.session-log/`, tool
-dir `.relay/` — descriptive and brand-neutral. Alternates: *Baton, Carryover,
-Handoff*. Cosmetic; renamable before release.
+**Relay** (agents relay the baton). Data dir `.session-log/`, tool dir `.relay/`:
+descriptive and brand-neutral.
 
 ## 16. Alternatives considered
 
-- **Loading model** — *last-session-only* (ignores the 10-day intent) and *full
-  10-day digest* (token tax every session) rejected in favor of **full last
-  session + surfaced index**.
-- **Handoff schema** — a *lean 3-part* form risked placeholder handoffs; the *full
-  Forge log* is too heavy. Chose the **6-section structured** form.
-- **Packaging** — a *Claude-Code-only plugin* fails cross-harness; a *pure copy-in
-  convention* has no enforcement. Chose the **portable core + thin adapters**.
-- **File operations** — *agent-executed* (LLM does the writes/pruning) rejected in
-  favor of a **deterministic `relay.sh` script**: reliability, testability, and
-  the lock all require it.
-- **Storage** — *committed / cloud-synced* rejected in favor of **local-only,
-  gitignored** data: it is multi-*agent*, not multi-device, and the data must stay
-  local to reconcile with agents' local action-memories later.
-- **Distribution** — a *thin fetch-installer* (needs network, not one-file) and a
-  *Claude-Code plugin* (CC-only, duplicates the installer) rejected in favor of a
-  **single embedded `install.sh`**: harness-neutral, offline-capable, one file to share.
+- **Loading model:** last-session-only (ignores the 10-day intent) and a full
+  10-day digest (token tax every session) were rejected in favor of **full last
+  session plus surfaced index**.
+- **Handoff schema:** a lean 3-part form risked placeholder handoffs; the full
+  Forge log is too heavy. Chose the **6-section structured** form.
+- **Packaging:** a Claude-Code-only plugin fails cross-harness; a pure copy-in
+  convention has no enforcement. Chose **portable core plus thin adapters**.
+- **File operations:** agent-executed writes were rejected in favor of a
+  **deterministic `relay.sh`**: reliability, testability, and the lock all
+  require it.
+- **Locking:** `flock` was the first design but is missing on stock macOS.
+  Chose a **`mkdir` lock** with PID and age-based reclaim.
+- **Index format:** JSON was considered and rejected. The index is read by
+  agents, written by bash, and derived from history, so a padded Markdown table
+  serves every reader. A `--json` output can be added if a program consumer
+  appears.
+- **Storage:** committed or cloud-synced data was rejected in favor of
+  **local-only, gitignored** data.
+- **Distribution:** a thin fetch-installer (needs network) and a Claude Code
+  plugin (one CLI only) were rejected in favor of a **single embedded
+  `install.sh`**.
 
-## 17. Future (v2+)
+## 17. Future
 
-- **L3 hook-automatic save** — a `SessionEnd` (CC) / `Stop` (Codex) agent-hook
-  reads the session `transcript_path` and writes the handoff when L1/L2 didn't
-  fire. Both harnesses expose such an end-hook; pending a viability spike
-  (teardown timing; agent-hooks are framed for verification).
-- **`PreCompact` checkpoint** — write a handoff before context compaction on long sessions.
-- **`git diff` crash-recovery stub** — for the hard-kill case L3 can't catch.
-- **Reconcile handoffs against each agent's local action-memories.**
-- **`relay digest`** — a single rolled-up brief across the full 10-day window on demand.
-- **A generic / instruction-only adapter** for harnesses beyond Claude Code and Codex.
-- **A Claude Code plugin wrapper** (and/or an `npx` channel) as convenience installers.
-- **The larger learning-system export** riding the same installer/adapter layer.
+- **L3 hook-automatic save:** a `SessionEnd` (Claude Code) / `Stop` (Codex) hook
+  that writes the handoff from the session transcript when L1 and L2 did not
+  fire. Pending a viability spike.
+- **Today's earlier sessions at load:** on multi-session days, also inject the
+  day's earlier handoffs under the shared cap.
+- **Knowledge for Cursor and OpenCode:** both read static files today, so Cursor
+  never sees the knowledge block.
+- **`PreCompact` checkpoint:** write a handoff before context compaction.
+- **`git diff` crash-recovery stub** for the hard-kill case L3 cannot catch.
+- **`relay digest`:** one rolled-up brief across the full 10-day window on demand.
+- **Plugin or `npx` wrappers** as convenience installers.
