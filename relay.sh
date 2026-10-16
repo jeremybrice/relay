@@ -537,10 +537,16 @@ k_add() {
       --near)   near=1;        shift;;
       --id)     { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --id needs a value" >&2; return 2; };  id="$2";  shift 2;;
       --ttl)    { [ $# -ge 2 ] && [ "${2#--}" = "$2" ]; } || { echo "relay: --ttl needs a value" >&2; return 2; }; ttl="$2"; shift 2;;
+      -)        rest+=("$(cat)"); shift;;          # body on stdin: no shell quoting to get wrong
+      --*)      case "$1" in
+                  *[[:space:]]*) rest+=("$1"); shift;;   # a body that starts with --, not a flag
+                  *) echo "relay: unknown option for knowledge add: $1 (the body is one quoted argument, or - for stdin)" >&2; return 2;;
+                esac;;
       *)        rest+=("$1");  shift;;
     esac
   done
   set -- ${rest[@]+"${rest[@]}"}
+  [ $# -le 1 ] || { echo "relay: knowledge add takes one body argument; quote the whole body or pass - and use stdin (got $#)" >&2; return 2; }
   local body="${1:-}"
   [ -n "$kind" ] || { echo "relay: knowledge add needs --fact or --lesson" >&2; return 2; }
   [ -n "${body//[[:space:]]/}" ] || { echo "relay: knowledge add needs a non-empty body" >&2; return 2; }
@@ -685,7 +691,11 @@ k_prune() {
   fi
 }
 
-_is_empty_body() { local b; b="$(_body "$1" | tr -d '[:space:]')"; [ -z "$b" ]; }
+_is_empty_body() { # no content, or only a stray flag token such as "--body" (an old add stored the flag as the body)
+  local b; b="$(_body "$1" | tr -d '[:space:]')"
+  [ -z "$b" ] && return 0
+  printf '%s' "$b" | grep -qE '^--[a-z][a-z-]*$'
+}
 
 _compact_move() { # apply file dest label reason  (moved=1 propagates via bash dynamic scoping)
   if [ "$1" = 1 ]; then
@@ -735,7 +745,7 @@ k_compact() {
       [ -e "$f" ] || continue
       _is_empty_body "$f" || continue
       id="$(_fm "$f" id)"
-      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty body"
+      _compact_move "$apply" "$f" "$kd/$kind/superseded/$id.md" "$kind/$id" "empty or flag-only body"
     done
   done
   # 2. cold archive: unreinforced lessons older than RELAY_LESSON_COLD_DAYS
