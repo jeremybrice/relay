@@ -20,25 +20,26 @@ READY_BLOCK="" READY_IDS="" READY_SHOWN=0   # set by _load_ready; read by _load_
 RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--fresh] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|claude|codex|grok] [--fresh] [--hook-json claude|codex|grok] [--digest STR]" >&2
 }
 
 main() {
   local cmd="${1:-}"; [ $# -gt 0 ] && shift || true
   DATA="${RELAY_DIR:-$PWD/.session-log}"
   if [ "$cmd" = knowledge ]; then cmd_knowledge "$@"; return $?; fi
-  local format="text" digest="" fresh=0
+  local format="text" digest="" fresh=0 hook=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
       --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
       --fresh)  fresh=1; shift;;
+      --hook-json) case "${2:-}" in claude|codex|grok) hook="$2";; *) echo "relay: --hook-json needs claude, codex or grok" >&2; return 2;; esac; shift 2;;
       --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
     esac
   done
   case "$cmd" in
-    load) cmd_load "$format" "$fresh";;
+    load) [ -n "$hook" ] && fresh="$(_hook_in "$hook")"; cmd_load "$format" "$fresh";;
     save) cmd_save "$digest";;
     *) usage; return 2;;
   esac
@@ -160,6 +161,29 @@ _kblock() { # word cap; ranked "...<TAB>id<TAB>line" rows on stdin -> each line 
       if (words + n <= cap || shown == 0) { words += n; shown++; print line; next }
       more++; rest = rest (more > 1 ? ", " : "") id }
     END { if (more) printf "More (%d, by id; open with: relay knowledge why <id>): %s\n", more, rest }'
+}
+
+_hook_in() { # harness -> prints 1 for a fresh start, 0 otherwise; notes the transcript path for turns
+  local raw="" src tp
+  [ -t 0 ] || IFS= read -r -d '' -t 2 raw || true    # never hang on a pipe that does not close
+  src="$(printf '%s' "$raw" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  tp="$(printf '%s' "$raw" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  [ -n "$tp" ] && _note_transcript "$1" "$tp"
+  case "$src" in ''|startup|clear) echo 1;; *) echo 0;; esac
+}
+
+_note_transcript() { # harness path -> .transcripts keeps one line per path, newest 20 (scratch file, no lock)
+  local f="$DATA/.transcripts" line tmp
+  line="$(printf '%s\t%s' "$1" "$2")"
+  mkdir -p "$DATA"; tmp="$(mktemp)"
+  { [ -f "$f" ] && grep -vxF -- "$line" "$f"; printf '%s\n' "$line"; } | tail -n 20 > "$tmp" || true
+  mv "$tmp" "$f"
+}
+
+_ready_line() { # visible startup line for the user, empty when nothing is ready
+  [ "${READY_SHOWN:-0}" -gt 0 ] || return 0
+  if [ "$READY_SHOWN" = 1 ]; then printf "Relay: 1 lesson ready to become a rule. I'll ask before we start."
+  else printf "Relay: %s lessons ready to become rules. I'll ask before we start." "$READY_SHOWN"; fi
 }
 
 _load_ready() { # fresh start only: graduation-ready lessons, ranked, at most RELAY_READY_MAX within RELAY_READY_CAP words
@@ -290,9 +314,11 @@ cmd_load() {
   [ -n "$kblock" ] && out="$out"$'\n\n'"$kblock"
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
-  if [ "$format" = "codex" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-      "$(printf '%s' "$out" | _json_escape)"
+  if [ "$format" = "codex" ] || [ "$format" = "claude" ]; then
+    local sys="" vis; vis="$(_ready_line)"
+    [ -n "$vis" ] && sys="$(printf '"systemMessage":"%s",' "$(printf '%s' "$vis" | _json_escape)")"
+    printf '{%s"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+      "$sys" "$(printf '%s' "$out" | _json_escape)"
   elif [ "$format" = "grok" ]; then
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
