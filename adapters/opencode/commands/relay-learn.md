@@ -36,5 +36,5 @@ RELAY_BODY
   > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
 ```
 
-5. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+5. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.

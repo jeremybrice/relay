@@ -503,6 +503,8 @@ def pick():
             h = "codex"
         elif any(k.startswith("GROK_") for k in env):
             h = "grok"
+        elif any(k.startswith("CURSOR_") for k in env):
+            return "cursor", None   # no transcript to read; never borrow another tool's session
     if h != "auto":
         return h, FINDERS[h][0]()
     found = [(n, f[0]()) for n, f in FINDERS.items()]

@@ -7,7 +7,7 @@ cd "$(dirname "$0")"; . ./helper.sh
 RELAY="$(cd .. && pwd)/relay.sh"; FIX="$(pwd)/fixtures/turns"; setup_tmp
 export HOME="$TMP/home" TZ=UTC
 ROOT="$(cd "$TMP" && pwd -P)"; mkdir -p "$DIR"
-clean() { env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u GROK_HOME $(env | sed -n 's/^\(CODEX_[A-Za-z0-9_]*\)=.*/-u \1/p; s/^\(GROK_[A-Za-z0-9_]*\)=.*/-u \1/p') "$@"; }
+clean() { env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u GROK_HOME $(env | sed -n 's/^\(CODEX_[A-Za-z0-9_]*\)=.*/-u \1/p; s/^\(GROK_[A-Za-z0-9_]*\)=.*/-u \1/p; s/^\(CURSOR_[A-Za-z0-9_]*\)=.*/-u \1/p') "$@"; }
 
 CX="$HOME/.codex/sessions/2026/10/25"; mkdir -p "$CX"
 sed "s|__ROOT__|$ROOT|g" "$FIX/codex.jsonl" > "$CX/rollout-2026-10-25T15-00-00-c1.jsonl"
@@ -34,6 +34,9 @@ touch "$CX/rollout-2026-10-25T15-00-00-c1.jsonl"
 assert_contains "$(clean "$RELAY" turns --dir "$DIR")" "rollout-2026-10-25T15-00-00-c1.jsonl"
 touch "$GR/prompt_history.jsonl"
 assert_contains "$(clean "$RELAY" turns --dir "$DIR")" "prompt_history.jsonl"
+
+# Cursor has no transcript Relay can read: auto must not borrow another tool's session
+assert_eq "$(clean env CURSOR_TRACE_ID=x "$RELAY" turns --dir "$DIR")" "relay: no transcript found for this session; save from memory"
 
 # a rollout from another repo is not this session
 sed "s|__ROOT__|/somewhere/else|g" "$FIX/codex.jsonl" > "$CX/rollout-2026-10-25T15-00-00-c1.jsonl"

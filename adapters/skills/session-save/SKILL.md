@@ -5,6 +5,19 @@ description: Save a Relay handoff so the next session can pick up where you left
 
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"$PWD/.relay/relay.sh" turns --dir "$PWD/.session-log" --harness auto
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with the `relay-learn` skill. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections as concise markdown (`## Summary`, `## Changed`,
    `## Decisions`, `## Next`, `## Watch out`, `## Open questions`), naming real
    files/paths and dated facts. Carry forward every still-open item from the
@@ -38,8 +51,8 @@ RELAY_BODY
    Re-asserting on a new day is what moves a lesson toward graduation. Do not
    re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge from this session (skip if none) with the
-   `relay-learn` skill. If the tool says a lesson is graduation-ready, offer
-   graduation in one line. Never graduate without the user's okay.
+   `relay-learn` skill. If the tool says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or a load warned
    "(⚠ N ... over cap ...)"), offer `relay-compact` in one line.
    Never run it unasked.

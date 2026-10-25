@@ -20,7 +20,8 @@ as `R` and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -36,7 +37,8 @@ RELAY_BODY
 
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Report final counts: `R knowledge list D`. (The session-start hook picks up
    the compacted store next session — no snapshot refresh needed.)
 

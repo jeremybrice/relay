@@ -33,8 +33,8 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+4. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 
 Do not write `.session-log/relay-instructions.md`. Session start reads
 `.session-log/latest.md` and `.session-log/index.md` only.

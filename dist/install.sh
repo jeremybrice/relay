@@ -504,6 +504,8 @@ def pick():
             h = "codex"
         elif any(k.startswith("GROK_") for k in env):
             h = "grok"
+        elif any(k.startswith("CURSOR_") for k in env):
+            return "cursor", None   # no transcript to read; never borrow another tool's session
     if h != "auto":
         return h, FINDERS[h][0]()
     found = [(n, f[0]()) for n, f in FINDERS.items()]
@@ -1282,7 +1284,8 @@ continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer `/relay-compact` in one line — never run it unasked.
 RELAY_EOF
 }
@@ -1310,7 +1313,8 @@ and index are summaries only.
 When wrapping up ("done for today" / "continue tomorrow"), run `$session-save` to
 persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 RELAY_EOF
 }
 
@@ -1370,7 +1374,8 @@ as `R` and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1386,7 +1391,8 @@ RELAY_BODY
 
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Report final counts: `R knowledge list D`. (The session-start hook picks up
    the compacted store next session — no snapshot refresh needed.)
 
@@ -1427,7 +1433,7 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>`, only with the user's okay.
+4. If a lesson is graduation-ready, tell the user it will be asked about at the next session start. Do not offer graduation now.
 RELAY_EOF
 }
 
@@ -1439,6 +1445,19 @@ description: Save a Relay handoff for the next Codex session
 ---
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" turns --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" --harness codex
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with `$relay-learn`. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections (`## Summary`, `## Changed`, `## Decisions`, `## Next`,
    `## Watch out`, `## Open questions`). Carry forward every still-open item from
    the loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
@@ -1466,8 +1485,9 @@ RELAY_BODY
    Restate the loaded text rather than paraphrasing it. If the lesson was listed
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
-5. Capture new durable knowledge with `$relay-learn` (skip if none). Offer
-   graduation only when prompted and approved.
+5. Capture new durable knowledge with `$relay-learn` (skip if none). If the tool says a lesson is
+   graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or the session-start load warned
    "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line. Never run it unasked.
 RELAY_EOF
@@ -1486,7 +1506,8 @@ continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer the `relay-compact` skill in one line.
 RELAY_EOF
 }
@@ -1504,7 +1525,8 @@ continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer the `relay-compact` skill in one line.
 RELAY_EOF
 }
@@ -1551,7 +1573,8 @@ continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 RELAY_EOF
 }
 
@@ -1581,7 +1604,8 @@ as `R` and `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1597,7 +1621,8 @@ RELAY_BODY
 
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Refresh the snapshot opencode auto-loads next session:
 
    ```bash
@@ -1651,8 +1676,8 @@ RELAY_BODY
   > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
 ```
 
-5. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+5. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 RELAY_EOF
 }
 
@@ -1692,7 +1717,8 @@ RELAY_BODY
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
-   says a lesson is graduation-ready, offer graduation in one line.
+   says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
    `instructions` field (run this after any knowledge writes too):
 
@@ -1748,7 +1774,8 @@ human-gated semantic pass. Use `"$PWD/.relay/relay.sh"` as `R` and
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1763,7 +1790,8 @@ RELAY_BODY
 ```
 
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Report final counts: `R knowledge list D`. The next session picks up the
    compacted store when it reads `.session-log/`. No snapshot refresh.
 
@@ -1810,8 +1838,8 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+4. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 
 Do not write `.session-log/relay-instructions.md`. Session start reads
 `.session-log/latest.md` and `.session-log/index.md` only.
@@ -1826,6 +1854,19 @@ description: Save a Relay handoff so the next session can pick up where you left
 
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"$PWD/.relay/relay.sh" turns --dir "$PWD/.session-log" --harness auto
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with the `relay-learn` skill. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections as concise markdown (`## Summary`, `## Changed`,
    `## Decisions`, `## Next`, `## Watch out`, `## Open questions`), naming real
    files/paths and dated facts. Carry forward every still-open item from the
@@ -1859,8 +1900,8 @@ RELAY_BODY
    Re-asserting on a new day is what moves a lesson toward graduation. Do not
    re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge from this session (skip if none) with the
-   `relay-learn` skill. If the tool says a lesson is graduation-ready, offer
-   graduation in one line. Never graduate without the user's okay.
+   `relay-learn` skill. If the tool says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or a load warned
    "(⚠ N ... over cap ...)"), offer `relay-compact` in one line.
    Never run it unasked.
