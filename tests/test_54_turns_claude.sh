@@ -20,7 +20,7 @@ assert_contains "$out" '1. [14:02] agent said: "I rendered the panel with the de
 assert_contains "$out" "2. [14:05] you: \"okay let's try this instead, no border\""
 assert_contains "$out" "3. [14:06] you rejected a tool call: \"don't touch the theme file\""
 assert_contains "$out" '5. [14:11] you: "the shadow looks muddy on dark mode"'
-for gone in "meta expansion" "command-name" "sidechain secret" "command not found" "pasted_content" "[Image"; do
+for gone in "being continued from a previous conversation" "meta expansion" "command-name" "sidechain secret" "command not found" "pasted_content" "[Image"; do
   [ -z "$(printf '%s' "$out" | grep -F -- "$gone" || true)" ] || { echo "FAIL: [$gone] leaked into turns"; exit 1; }
 done
 line4="$(printf '%s\n' "$out" | grep '^4\. ')"
@@ -48,6 +48,16 @@ rm "$P/s2.jsonl"
 out="$(turns env RELAY_TURNS_CAP=40 "$RELAY" turns --dir "$DIR" --harness claude)"
 assert_match "$out" "older turns dropped\)$"
 assert_contains "$out" "the shadow looks muddy on dark mode"
+
+# malformed records never leak a traceback into the agent's context
+{ echo '[1,2]'; echo '{"type":"user","timestamp":5,"message":{"role":"user","content":[{"type":"text","text":null}]}}'
+  echo '{"type":"user","message":"just a string"}'; echo '{"type":"assistant","message":{"content":[{"type":"text","text":null}]}}'
+  echo '{"type":"user","timestamp":"2026-10-25T15:00:00.000Z","message":{"role":"user","content":"after the junk"}}'; } > "$P/s3.jsonl"
+printf 'claude\t%s\n' "$P/s3.jsonl" >> "$DIR/.transcripts"; touch "$P/s3.jsonl"
+out="$(turns "$RELAY" turns --dir "$DIR" --harness claude 2>&1)"
+[ -z "$(printf '%s' "$out" | grep -F Traceback || true)" ] || { echo "FAIL: traceback leaked: $out"; exit 1; }
+assert_contains "$out" 'you: "after the junk"'
+rm "$P/s3.jsonl"
 
 # degrade, exit 0
 rm -rf "$HOME/.claude"

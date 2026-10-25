@@ -53,5 +53,9 @@ for i in $(seq 1 25); do hook "{\"source\":\"resume\",\"transcript_path\":\"/t/$
 assert_eq "$(grep -c . "$DIR/.transcripts")" "20"
 assert_eq "$(tail -n1 "$DIR/.transcripts")" "$(printf 'claude\t/t/25.jsonl')"
 
+# CR and other control bytes in loaded text still give valid JSON
+printf '## Summary\r\nred \033[31mtext\033[0m and a bell \007 here\r\n' | "$RELAY" save --dir "$DIR" --digest cr
+for fmt in claude codex grok; do isjson "$(hook '{"source":"startup"}' $fmt $fmt)"; done
+
 assert_exit 2 "$RELAY" load --dir "$DIR" --hook-json cursor
 pass "load --hook-json: fresh-only Ready block, visible line, transcript notes, bad stdin tolerated"

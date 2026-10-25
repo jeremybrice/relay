@@ -135,9 +135,9 @@ _prune() { # keep the newest RELAY_WINDOW history files; glob order is ascending
   return 0
 }
 
-_json_escape() {
-  awk 'BEGIN{ORS=""}
-       { gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t");
+_json_escape() { # strip control bytes JSON forbids raw (keep tab, newline, CR), then escape
+  LC_ALL=C tr -d '\000-\010\013\014\016-\037' | awk 'BEGIN{ORS=""}
+       { gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t"); gsub(/\r/,"\\r");
          if (NR>1) printf "\\n"; printf "%s", $0 }'
 }
 
@@ -356,9 +356,11 @@ def records(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
-                yield json.loads(line)
+                o = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(o, dict):
+                yield o
 
 
 def noted(h):
@@ -381,7 +383,9 @@ def newest(paths):
 def text_parts(content):
     if isinstance(content, str):
         return [content]
-    return [c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text"]
+    if not isinstance(content, list):
+        return []
+    return [str(c.get("text") or "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
 
 
 def user_text(t):
@@ -412,15 +416,16 @@ def find_claude():
 def parse_claude(path):
     ev, agent = [], ""
     for o in records(path):
-        if o.get("isSidechain"):
-            continue
-        kind, content = o.get("type"), (o.get("message") or {}).get("content")
+        if o.get("isSidechain") or o.get("isCompactSummary") or o.get("isVisibleInTranscriptOnly"):
+            continue   # sidechains, and the compaction summary Claude Code files as a user record
+        msg = o.get("message")
+        kind, content = o.get("type"), (msg if isinstance(msg, dict) else {}).get("content")
         if kind == "assistant":
             said = " ".join(text_parts(content)).strip()
             if said:
                 agent = said
         elif kind == "user" and not o.get("isMeta"):
-            ts = o.get("timestamp", "")
+            ts = str(o.get("timestamp") or "")
             for part in content if isinstance(content, list) else []:
                 if isinstance(part, dict) and part.get("type") == "tool_result" and part.get("is_error"):
                     body = part.get("content")
@@ -460,17 +465,19 @@ def parse_codex(path):
     # response_item user messages, next to injected AGENTS.md / environment blocks.
     events, items, agent_e, agent_i = [], [], "", ""
     for o in records(path):
-        pl, ts = o.get("payload") or {}, o.get("timestamp", "")
+        pl, ts = o.get("payload"), str(o.get("timestamp") or "")
+        pl = pl if isinstance(pl, dict) else {}
         if o.get("type") == "response_item" and pl.get("role") in ("assistant", "user"):
-            text = " ".join(c.get("text", "") for c in pl.get("content") or [] if isinstance(c, dict)
-                            and c.get("type") in ("output_text", "input_text")).strip()
+            parts = [str(c.get("text") or "") for c in pl.get("content") or [] if isinstance(c, dict)
+                     and c.get("type") in ("output_text", "input_text")]
             if pl["role"] == "assistant":
+                text = " ".join(parts).strip()
                 if text:
                     agent_e = agent_i = text
-            elif not text.startswith("# AGENTS.md instructions"):
-                u = user_text(text)
-                if u:
-                    items.append((ts, "user", u, agent_i))
+            else:   # per part: image wrappers and injected blocks drop out, the typed prompt stays
+                kept = [u for u in (user_text(t) for t in parts if not t.startswith("# AGENTS.md instructions")) if u]
+                if kept:
+                    items.append((ts, "user", " ".join(kept), agent_i))
                     agent_i = ""
         elif o.get("type") == "event_msg" and pl.get("type") == "user_message":
             u = user_text(str(pl.get("message") or ""))
@@ -493,8 +500,8 @@ def parse_grok(path):
     if not rows:
         return []
     sid = rows[-1].get("session_id")
-    return [(r.get("timestamp", ""), "user", r.get("prompt", "").strip(), "") for r in rows
-            if r.get("session_id") == sid and not r.get("is_bash") and r.get("prompt", "").strip()]
+    return [(str(r.get("timestamp") or ""), "user", str(r.get("prompt") or "").strip(), "") for r in rows
+            if r.get("session_id") == sid and not r.get("is_bash") and str(r.get("prompt") or "").strip()]
 
 
 FINDERS = {"claude": (find_claude, parse_claude), "codex": (find_codex, parse_codex),
@@ -505,14 +512,15 @@ def pick():
     h = harness
     if h == "auto":
         env = os.environ
+        tool = [k for k in env if not k.endswith("_HOME")]   # *_HOME is profile config, not the running tool
         if env.get("CLAUDECODE") == "1":
             h = "claude"
-        elif any(k.startswith("CODEX_") for k in env):
-            h = "codex"
-        elif any(k.startswith("GROK_") for k in env):
-            h = "grok"
-        elif any(k.startswith("CURSOR_") for k in env):
+        elif any(k.startswith("CURSOR_") for k in tool):
             return "cursor", None   # no transcript to read; never borrow another tool's session
+        elif any(k.startswith("CODEX_") for k in tool):
+            h = "codex"
+        elif any(k.startswith("GROK_") for k in tool):
+            h = "grok"
     if h != "auto":
         return h, FINDERS[h][0]()
     found = [(n, f[0]()) for n, f in FINDERS.items()]
@@ -587,7 +595,10 @@ def main():
         print("%d. %s" % (i, l))
 
 
-main()
+try:
+    main()
+except Exception:
+    print("relay: turns could not read the transcript; save from memory")
 PY
 }
 

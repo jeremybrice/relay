@@ -23,8 +23,9 @@ sed "s|__ROOT__|$ROOT|g" "$FIX/codex_v163.jsonl" > "$CX/rollout-2026-10-25T17-00
 out="$(clean "$RELAY" turns --dir "$DIR" --harness codex)"
 assert_contains "$out" "rollout-2026-10-25T17-00-00-c2.jsonl"
 assert_contains "$out" '1. [17:01] you: "can we change the border to none?"'
+assert_contains "$out" '3. [17:04] you: "this looks wrong"'
 assert_contains "$out" "2. [17:03] agent said: \"Set the border to none on the panel.\" → you: \"oh no that's not working on dark mode\""
-for gone in "AGENTS.md instructions" "environment_context" "INSTRUCTIONS"; do
+for gone in "AGENTS.md instructions" "environment_context" "INSTRUCTIONS" "<image" "</image>"; do
   [ -z "$(printf '%s' "$out" | grep -F -- "$gone" || true)" ] || { echo "FAIL: [$gone] leaked into codex turns"; exit 1; }
 done
 rm "$CX/rollout-2026-10-25T17-00-00-c2.jsonl"
@@ -41,7 +42,7 @@ done
 
 # auto: environment first, then the newest transcript
 assert_contains "$(clean env CODEX_THREAD_ID=x "$RELAY" turns --dir "$DIR")" "rollout-2026-10-25T15-00-00-c1.jsonl"
-assert_contains "$(clean env GROK_HOME="$HOME/.grok" "$RELAY" turns --dir "$DIR")" "prompt_history.jsonl"
+assert_contains "$(clean env GROK_WORKSPACE_ROOT="$ROOT" "$RELAY" turns --dir "$DIR")" "prompt_history.jsonl"
 touch "$CX/rollout-2026-10-25T15-00-00-c1.jsonl"
 assert_contains "$(clean "$RELAY" turns --dir "$DIR")" "rollout-2026-10-25T15-00-00-c1.jsonl"
 touch "$GR/prompt_history.jsonl"
@@ -49,6 +50,9 @@ assert_contains "$(clean "$RELAY" turns --dir "$DIR")" "prompt_history.jsonl"
 
 # Cursor has no transcript Relay can read: auto must not borrow another tool's session
 assert_eq "$(clean env CURSOR_TRACE_ID=x "$RELAY" turns --dir "$DIR")" "relay: no transcript found for this session; save from memory"
+# a profile-level CODEX_HOME / GROK_HOME is configuration, not the running tool
+assert_eq "$(clean env CODEX_HOME=/x CURSOR_TRACE_ID=y "$RELAY" turns --dir "$DIR")" "relay: no transcript found for this session; save from memory"
+assert_contains "$(clean env CODEX_HOME=/x "$RELAY" turns --dir "$DIR")" "prompt_history.jsonl"
 
 # a rollout from another repo is not this session
 sed "s|__ROOT__|/somewhere/else|g" "$FIX/codex.jsonl" > "$CX/rollout-2026-10-25T15-00-00-c1.jsonl"
