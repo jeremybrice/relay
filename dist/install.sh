@@ -15,27 +15,31 @@ RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
 RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
 RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
+RELAY_READY_MAX="${RELAY_READY_MAX:-3}"
+RELAY_READY_CAP="${RELAY_READY_CAP:-600}"
+READY_BLOCK="" READY_IDS="" READY_SHOWN=0   # set by _load_ready; read by _load_knowledge and the hook formats
 RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--fresh] [--digest STR]" >&2
 }
 
 main() {
   local cmd="${1:-}"; [ $# -gt 0 ] && shift || true
   DATA="${RELAY_DIR:-$PWD/.session-log}"
   if [ "$cmd" = knowledge ]; then cmd_knowledge "$@"; return $?; fi
-  local format="text" digest=""
+  local format="text" digest="" fresh=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
       --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
+      --fresh)  fresh=1; shift;;
       --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
     esac
   done
   case "$cmd" in
-    load) cmd_load "$format";;
+    load) cmd_load "$format" "$fresh";;
     save) cmd_save "$digest";;
     *) usage; return 2;;
   esac
@@ -159,6 +163,33 @@ _kblock() { # word cap; ranked "...<TAB>id<TAB>line" rows on stdin -> each line 
     END { if (more) printf "More (%d, by id; open with: relay knowledge why <id>): %s\n", more, rest }'
 }
 
+_load_ready() { # fresh start only: graduation-ready lessons, ranked, at most RELAY_READY_MAX within RELAY_READY_CAP words
+  READY_BLOCK="" READY_IDS="" READY_SHOWN=0
+  local kd="$DATA/knowledge" f id tmp rows
+  [ -d "$kd/lessons" ] || return 0
+  tmp="$(mktemp)"
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    _is_ready "$f" || continue
+    id="$(_fm "$f" id)"
+    printf '%05d\t%09d\t%s\t- `%s` (sessions:%s): %s\n' "$(_fm "$f" sessions)" \
+      "$(( 999999 - $(_days_since "$(_fm "$f" last_seen)") ))" "$id" "$id" "$(_fm "$f" sessions)" \
+      "$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')" >> "$tmp"
+  done
+  if [ -s "$tmp" ]; then
+    rows="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | awk -F'\t' -v cap="$RELAY_READY_CAP" -v max="$RELAY_READY_MAX" '
+      { n = split($4, w, " ")
+        if (shown == 0 || (shown < max && words + n <= cap)) { words += n; shown++; ids = ids $3 " "; lines = lines $4 "\n"; next }
+        more++ }
+      END { printf "%d\t%s\n%s", shown, ids, lines
+            if (more) printf "(+%d more ready; they come up next session)\n", more }')"
+    READY_SHOWN="$(printf '%s\n' "$rows" | head -n1 | cut -f1)"
+    READY_IDS="$(printf '%s\n' "$rows" | head -n1 | cut -f2)"
+    READY_BLOCK="## Ready to become rules (ask before starting work)"$'\n'"These lessons have come up on 3+ separate days. Before acting on the user's first message, ask once about each: propose a one-line rule (240 characters max) and offer yes / edit / not yet / drop. Yes or edit: relay knowledge graduate <id> --rule - (rule on stdin). Not yet: relay knowledge defer <id>. Drop: relay knowledge supersede <id>. Use a multiple-choice question tool if you have one, otherwise a numbered list. If the user skips the question, record nothing."$'\n'"$(printf '%s\n' "$rows" | sed '1d')"
+  fi
+  rm -f "$tmp"
+}
+
 _load_knowledge() {
   local kd="$DATA/knowledge" f id body conf last ttl age seen
   [ -d "$kd/facts" ] || [ -d "$kd/lessons" ] || return 0
@@ -195,6 +226,7 @@ _load_knowledge() {
   for f in "$kd"/lessons/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; seen="$(_fm "$f" seen)"; seen="${seen:-1}"
+    case " $READY_IDS " in *" $id "*) continue;; esac   # already asked about in the Ready block
     body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
     age="$(_days_since "$(_fm "$f" last_seen)")"
     printf '%05d\t%09d\t%s\t- `%s`: %s (seen:%s, sessions:%s)\n' \
@@ -227,7 +259,7 @@ _load_knowledge() {
 }
 
 cmd_load() {
-  local format="${1:-text}" latest="$DATA/latest.md" idx="$DATA/index.md"
+  local format="${1:-text}" fresh="${2:-0}" latest="$DATA/latest.md" idx="$DATA/index.md"
   [ -f "$latest" ] || return 0
   local sdate today se st days n out
   sdate="$(sed -n 's/^date:[[:space:]]*//p' "$latest" | head -n1)"
@@ -247,6 +279,8 @@ cmd_load() {
   if [ "$(_format_have)" -gt "$RELAY_FORMAT" ]; then
     out="⚠ This .session-log was written by a newer Relay (format $(_format_have)); update .relay/ with install.sh --detect before saving."$'\n\n'"$out"
   fi
+  [ "$fresh" = 1 ] && _load_ready
+  [ -n "$READY_BLOCK" ] && out="$out$READY_BLOCK"$'\n\n'
   n="$(wc -w < "$latest" | tr -d ' ')"
   if [ "${n:-0}" -gt "$RELAY_WORD_CAP" ]; then
     out="$out$(awk -v cap="$RELAY_WORD_CAP" 'BEGIN{c=0}{c+=NF;print} c>=cap{print "\n…[truncated — open .session-log/latest.md for the full handoff]"; exit}' "$latest")"
