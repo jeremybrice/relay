@@ -17,6 +17,18 @@ assert_contains "$out" "1. [15:02] agent said: \"I set the timeout to 30 seconds
 assert_contains "$out" '2. [15:05] you: "now lets also log the retry count"'
 [ -z "$(printf '%s' "$out" | grep -F environment_context || true)" ] || { echo "FAIL: injected context leaked"; exit 1; }
 
+# Codex 0.163 (exec and desktop) logs prompts only as response_item user messages, beside
+# injected AGENTS.md and environment blocks
+sed "s|__ROOT__|$ROOT|g" "$FIX/codex_v163.jsonl" > "$CX/rollout-2026-10-25T17-00-00-c2.jsonl"
+out="$(clean "$RELAY" turns --dir "$DIR" --harness codex)"
+assert_contains "$out" "rollout-2026-10-25T17-00-00-c2.jsonl"
+assert_contains "$out" '1. [17:01] you: "can we change the border to none?"'
+assert_contains "$out" "2. [17:03] agent said: \"Set the border to none on the panel.\" → you: \"oh no that's not working on dark mode\""
+for gone in "AGENTS.md instructions" "environment_context" "INSTRUCTIONS"; do
+  [ -z "$(printf '%s' "$out" | grep -F -- "$gone" || true)" ] || { echo "FAIL: [$gone] leaked into codex turns"; exit 1; }
+done
+rm "$CX/rollout-2026-10-25T17-00-00-c2.jsonl"
+
 GR="$HOME/.grok/sessions/$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$ROOT")"; mkdir -p "$GR"
 cp "$FIX/grok_prompt_history.jsonl" "$GR/prompt_history.jsonl"
 out="$(clean "$RELAY" turns --dir "$DIR" --harness grok)"

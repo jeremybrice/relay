@@ -457,20 +457,28 @@ def find_codex():
 
 
 def parse_codex(path):
-    ev, agent = [], ""
+    # Older Codex logs typed prompts as user_message events; 0.163 logs them only as
+    # response_item user messages, next to injected AGENTS.md / environment blocks.
+    events, items, agent_e, agent_i = [], [], "", ""
     for o in records(path):
-        pl = o.get("payload") or {}
-        if o.get("type") == "response_item" and pl.get("role") == "assistant":
-            said = " ".join(c.get("text", "") for c in pl.get("content") or []
-                            if isinstance(c, dict) and c.get("type") == "output_text").strip()
-            if said:
-                agent = said
+        pl, ts = o.get("payload") or {}, o.get("timestamp", "")
+        if o.get("type") == "response_item" and pl.get("role") in ("assistant", "user"):
+            text = " ".join(c.get("text", "") for c in pl.get("content") or [] if isinstance(c, dict)
+                            and c.get("type") in ("output_text", "input_text")).strip()
+            if pl["role"] == "assistant":
+                if text:
+                    agent_e = agent_i = text
+            elif not text.startswith("# AGENTS.md instructions"):
+                u = user_text(text)
+                if u:
+                    items.append((ts, "user", u, agent_i))
+                    agent_i = ""
         elif o.get("type") == "event_msg" and pl.get("type") == "user_message":
             u = user_text(str(pl.get("message") or ""))
             if u:
-                ev.append((o.get("timestamp", ""), "user", u, agent))
-                agent = ""
-    return ev
+                events.append((ts, "user", u, agent_e))
+                agent_e = ""
+    return events or items
 
 
 # ---- Grok (prompt history only: no agent side) ----
