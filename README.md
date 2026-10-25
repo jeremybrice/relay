@@ -114,9 +114,17 @@ of mangling the files.
   top-ranked entries appear in full under their own word budget (so knowledge
   can't crowd out the handoff), and the rest are listed by id
   (`relay knowledge why <id>` opens one), so nothing is silently dropped.
+- **Ready to become rules**: on a fresh start (not after a compaction or a
+  resume), up to 3 graduation-ready lessons appear above the handoff, and the
+  agent asks you once about each before it starts work: yes, edit, not yet, or
+  drop. Claude Code and Codex also show a one-line notice when any are ready.
 - **Save** with `/session-save` (Claude Code) or `$session-save` (Codex) — or the
   agent offers when you wrap up. One reflection routes into three destinations:
-  the handoff, any new facts, and any new/reinforced lessons.
+  the handoff, any new facts, and any new/reinforced lessons. Before writing,
+  the agent runs `relay turns`, which reads your own turns since the last save
+  back from the tool's transcript (Claude Code, Codex, Grok), so a correction
+  made hours earlier, or before a compaction, can still become a lesson.
+  Nothing from the transcript is stored.
 - **Learn mid-session** with `/relay-learn` (`$relay-learn` on Codex) to capture a
   fact or lesson the moment it comes up.
 
@@ -144,12 +152,19 @@ confidence math, no decay scheduler:
 1. **Noticed** — captured at save (`sessions: 1`).
 2. **Reinforced** — re-asserted on a *new day*; same-day repeats don't count, so a
    coincidence seen three times in one afternoon can't masquerade as a pattern.
-3. **Ready** — at `sessions ≥ 3` (configurable via `RELAY_GRADUATE_AT`).
-4. **Graduated** — the agent **proposes**, you approve, and the lesson is written
-   as an id-keyed block into `AGENTS.md` (or `CLAUDE.md`, if it already holds
-   graduated rules) where the harness loads it
-   natively. This step is always gated — it's a persistent, behavior-changing
-   edit to a file you may commit.
+3. **Ready** — at `sessions ≥ 3` (configurable via `RELAY_GRADUATE_AT`). It is
+   asked about at the next fresh session start, never at wrap-up.
+4. **Graduated** — the agent proposes a one-line rule (240 characters max), you
+   say yes or reword it, and the rule is written as an id-keyed block into
+   `AGENTS.md` (or `CLAUDE.md`, if it already holds graduated rules) where the
+   harness loads it natively, with a pointer to the full lesson
+   (`relay knowledge why <id>`). This step is always gated — it's a persistent,
+   behavior-changing edit to a file you may commit.
+
+"Not yet" (`knowledge defer <id>`) hides a ready lesson until it is re-asserted on
+a later day, so it only comes back with new evidence. "Drop" retires it with
+`knowledge supersede <id>`. Skipping the question records nothing; it comes up
+again next session.
 
 A graduated rule that goes stale is drained with `knowledge ungraduate <id>`; a
 wrong lesson or fact is retired with `knowledge supersede <id>`. Nothing is ever
@@ -164,8 +179,11 @@ relay knowledge add --fact   --near "…"          # show matching ids, write no
 relay knowledge add --fact   --id <slug> "…"     # create / confirm / or raise conflict
 relay knowledge add --lesson --id <slug> "…"     # create / bump seen + sessions
 relay knowledge add --fact --id <slug> - <<'EOF' # body on stdin (quote-safe)
-relay knowledge graduate <id>                    # write a reinforced lesson into the
-                                                 #   instruction file (gated)
+relay knowledge graduate <id> --rule - <<'EOF'   # write a one-line rule for a ready
+                                                 #   lesson into the instruction file (gated)
+relay knowledge defer <id>                       # "not yet": wait for a later-day re-assertion
+relay turns --harness auto|claude|codex|grok     # print your turns since the last save
+                                                 #   (read-only; writes no transcript text)
 ```
 
 `knowledge add` rejects unknown options and more than one body argument, so a
