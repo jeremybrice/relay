@@ -307,6 +307,19 @@ _fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatte
   mv "$tmp" "$1"
 }
 
+_fm_put() { # file key value  (like _fm_set, but inserts the key before the closing --- when absent)
+  if grep -q "^$2: " "$1" 2>/dev/null; then _fm_set "$1" "$2" "$3"; return; fi
+  local tmp; tmp="$(mktemp)"
+  awk -v k="$2" -v v="$3" 'BEGIN{d=0} /^---$/{d++; if(d==2) print k": "v} {print}' "$1" > "$tmp"
+  mv "$tmp" "$1"
+}
+
+_is_ready() { # lesson file -> 0 when graduation-ready: sessions >= threshold and not deferred at this count
+  local s d; s="$(_fm "$1" sessions)"; d="$(_fm "$1" deferred_at)"
+  [ "${s:-1}" -ge "$RELAY_GRADUATE_AT" ] || return 1
+  [ -z "$d" ] || [ "${s:-1}" -gt "$d" ]
+}
+
 _body() { awk 'BEGIN{d=0} /^---$/{d++; next} d>=2{print}' "$1"; }
 
 _set_body() { # file body
@@ -552,6 +565,7 @@ cmd_knowledge() {
     list)       k_list "$@";;
     graduate)   k_graduate "$@";;
     ungraduate) k_ungraduate "$@";;
+    defer)      k_defer "$@";;
     supersede)  k_supersede "$@";;
     prune)      k_prune "$@";;
     compact)    k_compact "$@";;
@@ -621,8 +635,8 @@ _k_add_lesson() {
     _set_body "$f" "$body"
     echo "reinforced lesson: $id (seen:$seen sessions:$sess)"
     [ -n "$prev" ] && echo "  wording updated; previous kept in lessons/superseded/$(basename "$prev")"
-    if [ "$sess" -ge "$RELAY_GRADUATE_AT" ]; then
-      echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): propose 'relay knowledge graduate $id'"
+    if _is_ready "$f"; then
+      echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): it will be asked about at the next session start"
     fi
   else
     _write_lesson "$f" "$id" 1 1 "$today" "$today" "$(_provenance)" "$body"
@@ -677,6 +691,18 @@ _block_remove() { # file id  (idempotent)
     BEGIN{ s="<!-- relay:learned:"id" -->"; e="<!-- /relay:learned:"id" -->"; skip=0 }
     { if($0==s){skip=1; next} if(skip==1){ if($0==e) skip=0; next } print }' "$file" > "$tmp"
   mv "$tmp" "$file"
+}
+
+k_defer() { # "not yet": hide a ready lesson until it is re-asserted on a later day
+  local id; id="$(_slugify "${1:-}")"
+  local f="$DATA/knowledge/lessons/$id.md"
+  [ -f "$f" ] || { echo "relay: no active lesson: $id" >&2; return 1; }
+  _lock || return 1
+  local sess; sess="$(_fm "$f" sessions)"; sess="${sess:-1}"
+  _fm_put "$f" deferred_at "$sess"
+  _kindex
+  _unlock
+  echo "deferred: $id (now sessions:$sess; comes back once re-asserted on a later day)"
 }
 
 k_ungraduate() {
