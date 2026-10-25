@@ -436,14 +436,78 @@ def parse_claude(path):
     return ev
 
 
-FINDERS = {"claude": (find_claude, parse_claude)}
+# ---- Codex ----
+def find_codex():
+    paths = noted("codex")
+    if paths:
+        return newest(paths)
+    import time
+    recent, cut = [], time.time() - 2 * 86400
+    for p in glob.glob(os.path.join(home, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl")):
+        if os.path.getmtime(p) < cut:
+            continue
+        for o in records(p):
+            if o.get("type") == "session_meta":
+                cwd = (o.get("payload") or {}).get("cwd") or ""
+                if cwd and (cwd == root or os.path.realpath(cwd) == root):
+                    recent.append(p)
+                break
+    return newest(recent)
+
+
+def parse_codex(path):
+    ev, agent = [], ""
+    for o in records(path):
+        pl = o.get("payload") or {}
+        if o.get("type") == "response_item" and pl.get("role") == "assistant":
+            said = " ".join(c.get("text", "") for c in pl.get("content") or []
+                            if isinstance(c, dict) and c.get("type") == "output_text").strip()
+            if said:
+                agent = said
+        elif o.get("type") == "event_msg" and pl.get("type") == "user_message":
+            u = user_text(str(pl.get("message") or ""))
+            if u:
+                ev.append((o.get("timestamp", ""), "user", u, agent))
+                agent = ""
+    return ev
+
+
+# ---- Grok (prompt history only: no agent side) ----
+def find_grok():
+    from urllib.parse import quote
+    base = os.environ.get("GROK_HOME") or os.path.join(home, ".grok")
+    p = os.path.join(base, "sessions", quote(root, safe=""), "prompt_history.jsonl")
+    return p if os.path.isfile(p) else None
+
+
+def parse_grok(path):
+    rows = list(records(path))
+    if not rows:
+        return []
+    sid = rows[-1].get("session_id")
+    return [(r.get("timestamp", ""), "user", r.get("prompt", "").strip(), "") for r in rows
+            if r.get("session_id") == sid and not r.get("is_bash") and r.get("prompt", "").strip()]
+
+
+FINDERS = {"claude": (find_claude, parse_claude), "codex": (find_codex, parse_codex),
+           "grok": (find_grok, parse_grok)}
 
 
 def pick():
-    if harness != "auto":
-        f = FINDERS.get(harness)
-        return (harness, f[0]()) if f else (harness, None)
-    return "claude", find_claude()
+    h = harness
+    if h == "auto":
+        env = os.environ
+        if env.get("CLAUDECODE") == "1":
+            h = "claude"
+        elif any(k.startswith("CODEX_") for k in env):
+            h = "codex"
+        elif any(k.startswith("GROK_") for k in env):
+            h = "grok"
+    if h != "auto":
+        return h, FINDERS[h][0]()
+    found = [(n, f[0]()) for n, f in FINDERS.items()]
+    found = [x for x in found if x[1]]
+    return max(found, key=lambda x: os.path.getmtime(x[1])) if found else ("claude", None)
 
 
 # ---- format ----

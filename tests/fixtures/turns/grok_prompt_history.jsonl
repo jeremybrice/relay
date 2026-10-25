@@ -1,0 +1,4 @@
+{"timestamp": "2026-10-24T09:00:00.123456Z", "session_id": "g1", "prompt": "old session prompt", "is_bash": false}
+{"timestamp": "2026-10-25T16:00:00.123456Z", "session_id": "g2", "prompt": "first g2 prompt", "is_bash": false}
+{"timestamp": "2026-10-25T16:01:00.123456Z", "session_id": "g2", "prompt": "ls -la", "is_bash": true}
+{"timestamp": "2026-10-25T16:02:00.123456Z", "session_id": "g2", "prompt": "oh no that's not working, can we change this?", "is_bash": false}
