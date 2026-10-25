@@ -16,23 +16,25 @@ RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
 RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
 RELAY_READY_MAX="${RELAY_READY_MAX:-3}"
 RELAY_READY_CAP="${RELAY_READY_CAP:-600}"
+RELAY_PYTHON="${RELAY_PYTHON:-python3}"
 READY_BLOCK="" READY_IDS="" READY_SHOWN=0   # set by _load_ready; read by _load_knowledge and the hook formats
 RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|claude|codex|grok] [--fresh] [--hook-json claude|codex|grok] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save|turns} [--dir DIR] [--format text|claude|codex|grok] [--fresh] [--hook-json claude|codex|grok] [--harness auto|claude|codex|grok] [--digest STR]" >&2
 }
 
 main() {
   local cmd="${1:-}"; [ $# -gt 0 ] && shift || true
   DATA="${RELAY_DIR:-$PWD/.session-log}"
   if [ "$cmd" = knowledge ]; then cmd_knowledge "$@"; return $?; fi
-  local format="text" digest="" fresh=0 hook=""
+  local format="text" digest="" fresh=0 hook="" harness="auto"
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
       --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
       --fresh)  fresh=1; shift;;
+      --harness) [ $# -ge 2 ] || { echo "relay: --harness needs a value" >&2; return 2; }; harness="$2"; shift 2;;
       --hook-json) case "${2:-}" in claude|codex|grok) hook="$2";; *) echo "relay: --hook-json needs claude, codex or grok" >&2; return 2;; esac; shift 2;;
       --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
@@ -41,6 +43,7 @@ main() {
   case "$cmd" in
     load) [ -n "$hook" ] && fresh="$(_hook_in "$hook")"; cmd_load "$format" "$fresh";;
     save) cmd_save "$digest";;
+    turns) cmd_turns "$harness";;
     *) usage; return 2;;
   esac
 }
@@ -324,6 +327,194 @@ cmd_load() {
   else
     printf '%s\n' "$out"
   fi
+}
+
+cmd_turns() { # print the user's turns since the last save, read from the harness's own transcript
+  local harness="$1" root
+  case "$harness" in auto|claude|codex|grok) ;; *) echo "relay: --harness needs auto, claude, codex or grok" >&2; return 2;; esac
+  command -v "$RELAY_PYTHON" >/dev/null 2>&1 || { echo "relay: turns needs python3; save from memory"; return 0; }
+  root="$(cd "$(dirname "$DATA")" 2>/dev/null && pwd -P)" || root="$PWD"
+  mkdir -p "$DATA"
+  _turns_py "$harness" "$root" "$DATA" || echo "relay: turns could not read the transcript; save from memory"
+  return 0
+}
+
+_turns_py() { # harness root data — locate, parse, format; writes only .turns-pending (path + timestamp)
+  "$RELAY_PYTHON" - "$@" <<'PY'
+import glob, json, os, re, sys
+from datetime import datetime
+
+harness, root, data = sys.argv[1:4]
+home = os.environ.get("HOME", "")
+cap = int(os.environ.get("RELAY_TURNS_CAP") or 1500)
+ACKS = {"ok", "okay", "k", "yes", "yep", "yeah", "sure", "go ahead", "continue", "proceed",
+        "do it", "perfect", "great", "thanks", "thank you", "sounds good", "looks good"}
+PASTE = re.compile(r"</?pasted_content[^>]*>")
+
+
+def records(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                yield json.loads(line)
+            except ValueError:
+                continue
+
+
+def noted(h):
+    out = []
+    try:
+        for line in open(os.path.join(data, ".transcripts"), encoding="utf-8"):
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2 and parts[0] == h and os.path.isfile(parts[1]):
+                out.append(parts[1])
+    except OSError:
+        pass
+    return out
+
+
+def newest(paths):
+    paths = [p for p in paths if os.path.isfile(p)]
+    return max(paths, key=os.path.getmtime) if paths else None
+
+
+def text_parts(content):
+    if isinstance(content, str):
+        return [content]
+    return [c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text"]
+
+
+def user_text(t):
+    t = t.strip()
+    if t.startswith("<") and not t.startswith("<pasted_content"):
+        return None
+    t = re.sub(r"^(\[Image #\d+\]\s*)+", "", PASTE.sub("", t)).strip()
+    return t or None
+
+
+# ---- Claude Code ----
+def find_claude():
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    paths = noted("claude")
+    if sid:
+        for p in paths:
+            if os.path.basename(p) == sid + ".jsonl":
+                return p
+        hits = glob.glob(os.path.join(home, ".claude", "projects", "*", sid + ".jsonl"))
+        if hits:
+            return hits[0]
+    if paths:
+        return newest(paths)
+    enc = re.sub(r"[^A-Za-z0-9]", "-", root)
+    return newest(glob.glob(os.path.join(home, ".claude", "projects", enc, "*.jsonl")))
+
+
+def parse_claude(path):
+    ev, agent = [], ""
+    for o in records(path):
+        if o.get("isSidechain"):
+            continue
+        kind, content = o.get("type"), (o.get("message") or {}).get("content")
+        if kind == "assistant":
+            said = " ".join(text_parts(content)).strip()
+            if said:
+                agent = said
+        elif kind == "user" and not o.get("isMeta"):
+            ts = o.get("timestamp", "")
+            for part in content if isinstance(content, list) else []:
+                if isinstance(part, dict) and part.get("type") == "tool_result" and part.get("is_error"):
+                    body = part.get("content")
+                    body = body if isinstance(body, str) else " ".join(text_parts(body))
+                    if "doesn't want to proceed" in body:
+                        reason = body.split("the user said:", 1)[1].strip() if "the user said:" in body else ""
+                        ev.append((ts, "reject", reason, ""))
+            for raw in text_parts(content):
+                u = user_text(raw)
+                if u:
+                    ev.append((ts, "user", u, agent))
+                    agent = ""
+    return ev
+
+
+FINDERS = {"claude": (find_claude, parse_claude)}
+
+
+def pick():
+    if harness != "auto":
+        f = FINDERS.get(harness)
+        return (harness, f[0]()) if f else (harness, None)
+    return "claude", find_claude()
+
+
+# ---- format ----
+def clip(s):
+    w = s.split()
+    return " ".join(w) if len(w) <= 80 else " ".join(w[:60]) + " … " + " ".join(w[-20:])
+
+
+def hhmm(ts):
+    try:
+        return datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=__import__("datetime").timezone.utc).astimezone().strftime("%H:%M")
+    except ValueError:
+        return ts[11:16]
+
+
+def is_ack(t):
+    return re.sub(r"[^a-z ]", "", t.lower()).strip() in ACKS
+
+
+def main():
+    h, path = pick()
+    if not path:
+        print("relay: no transcript found for this session; save from memory")
+        return
+    since = ""
+    try:
+        for line in open(os.path.join(data, ".turns-cursor"), encoding="utf-8"):
+            p, _, t = line.rstrip("\n").partition("\t")
+            if p == path:
+                since = t
+    except OSError:
+        pass
+    ev = [e for e in FINDERS[h][1](path) if e[0] > since]
+    if not ev:
+        print("relay: no new turns since the last save")
+        return
+    acks = sum(1 for e in ev if e[1] == "user" and is_ack(e[2]))
+    lines = []
+    for ts, kind, text, ctx in ev:
+        if kind == "user" and is_ack(text):
+            continue
+        if kind == "reject":
+            body = 'you rejected a tool call: "%s"' % clip(text) if text else "you rejected a tool call"
+        elif ctx:
+            w = ctx.split()
+            said = ("…" if len(w) > 25 else "") + " ".join(w[-25:])
+            body = 'agent said: "%s" → you: "%s"' % (said, clip(text))
+        else:
+            body = 'you: "%s"' % clip(text)
+        lines.append("[%s] %s" % (hhmm(ts), body))
+    with open(os.path.join(data, ".turns-pending"), "w", encoding="utf-8") as f:
+        f.write("%s\t%s\n" % (path, max(e[0] for e in ev)))
+    if not lines:
+        print("relay: no new turns since the last save")
+        return
+    dropped = 0
+    while len(lines) > 1 and sum(len(l.split()) for l in lines) > cap:
+        lines.pop(0)
+        dropped += 1
+    head = "## Your turns this session (since %s; %d turns, %d acknowledgements not shown%s)" % (
+        hhmm(since) if since else "session start", len(lines) + dropped, acks,
+        ", %d older turns dropped" % dropped if dropped else "")
+    print(head)
+    print("(transcript: %s)" % path)
+    for i, l in enumerate(lines, 1):
+        print("%d. %s" % (i, l))
+
+
+main()
+PY
 }
 
 cmd_save() {
