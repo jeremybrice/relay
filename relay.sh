@@ -601,8 +601,19 @@ cmd_save() {
   fi
   printf '%s\n' "$handoff" > "$DATA/latest.md"
   _index_update "$date" "$digest"
+  _turns_commit
   _prune
   _unlock
+}
+
+_turns_commit() { # (under the save lock) the turns read for this save are now saved: advance that transcript's cursor
+  local pend="$DATA/.turns-pending" cur="$DATA/.turns-cursor" path tmp
+  [ -f "$pend" ] || return 0
+  path="$(cut -f1 "$pend" | head -n1)"
+  tmp="$(mktemp)"
+  { [ -f "$cur" ] && awk -F'\t' -v p="$path" '$1 != p' "$cur"; head -n1 "$pend"; } | tail -n 20 > "$tmp" || true
+  mv "$tmp" "$cur"
+  rm -f "$pend"
 }
 
 _slugify() {
