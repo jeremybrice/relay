@@ -311,7 +311,7 @@ _fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatte
 _fm_put() { # file key value  (like _fm_set, but inserts the key before the closing --- when absent)
   if grep -q "^$2: " "$1" 2>/dev/null; then _fm_set "$1" "$2" "$3"; return; fi
   local tmp; tmp="$(mktemp)"
-  awk -v k="$2" -v v="$3" 'BEGIN{d=0} /^---$/{d++; if(d==2) print k": "v} {print}' "$1" > "$tmp"
+  RELAY_K="$2" RELAY_V="$3" awk 'BEGIN{d=0} /^---$/{d++; if(d==2) print ENVIRON["RELAY_K"]": "ENVIRON["RELAY_V"]} {print}' "$1" > "$tmp"
   mv "$tmp" "$1"
 }
 
@@ -530,8 +530,23 @@ _block_upsert() { # file id body  (idempotent; replaces any existing id-block)
   rm -f "$bodyf"
 }
 
-k_graduate() {
-  local id; id="$(_slugify "${1:-}")"
+k_graduate() { # id [--rule TEXT|-]  (--rule: write one short line instead of the lesson body)
+  local id="" rule="" has_rule=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --rule) [ $# -ge 2 ] || { echo "relay: --rule needs a value (or - for stdin)" >&2; return 2; }
+              has_rule=1; if [ "$2" = - ]; then rule="$(cat)"; else rule="$2"; fi; shift 2;;
+      *) id="$1"; shift;;
+    esac
+  done
+  id="$(_slugify "$id")"
+  if [ "$has_rule" = 1 ]; then
+    local n; n="$(printf '%s' "$rule" | wc -m | tr -d ' ')"
+    case "$rule" in *$'\n'*) n=0;; esac
+    if [ "$n" -lt 1 ] || [ "$n" -gt 240 ]; then
+      echo "relay: --rule must be one line of 1 to 240 characters" >&2; return 2
+    fi
+  fi
   local f="$DATA/knowledge/lessons/$id.md"
   if [ ! -f "$f" ]; then
     [ -f "$DATA/knowledge/lessons/graduated/$id.md" ] && { echo "already graduated: $id"; return 0; }
@@ -539,7 +554,12 @@ k_graduate() {
   fi
   _lock || return 1
   local target; target="$(_instruction_file)"
-  _block_upsert "$target" "$id" "$(_body "$f")"
+  if [ "$has_rule" = 1 ]; then
+    _block_upsert "$target" "$id" "- $rule (why: relay knowledge why $id)"
+    _fm_put "$f" rule "$rule"
+  else
+    _block_upsert "$target" "$id" "$(_body "$f")"
+  fi
   _fm_set "$f" status graduated
   _fm_set "$f" graduated_to "$target"
   mkdir -p "$DATA/knowledge/lessons/graduated"
@@ -856,7 +876,7 @@ k_restore() {
 k_why() {
   local id; id="$(_slugify "${1:-}")"
   local f="" k
-  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
+  for k in facts lessons lessons/graduated; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
   [ -n "$f" ] || { echo "relay: no entry: $id" >&2; return 1; }
   echo "--- entry ---"; cat "$f"
   local src; src="$(_fm "$f" source)"
