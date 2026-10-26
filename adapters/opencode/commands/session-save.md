@@ -33,7 +33,8 @@ RELAY_BODY
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
-   says a lesson is graduation-ready, offer graduation in one line.
+   says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
    `instructions` field (run this after any knowledge writes too):
 

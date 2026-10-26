@@ -196,6 +196,33 @@ A missing `.session-log/` is created on the fly. After the handoff, the save
 skill goes on to capture durable knowledge (facts and lessons); that half is
 covered in the learning design.
 
+### Reading the user's turns (`relay turns`)
+
+Before authoring, the save skill runs `relay turns --harness <h>` (`auto` in the
+shared skill, `codex` in the Codex copy). It reads the harness's own transcript,
+which survives context compaction, and prints only the user's turns since this
+transcript's last save: real prompts (Wispr dictation inside `<pasted_content>`
+tags is kept as the user's words), tool calls the user rejected with their reason,
+and the last 25 words the agent said before each turn. System text, command
+expansions and sidechains are dropped; acknowledgements are counted, not shown.
+A turn over 80 words keeps its first 60 and last 20; the whole output is capped at
+`RELAY_TURNS_CAP` (1,500) words, oldest dropped first.
+
+Locating the transcript: Claude Code by `CLAUDE_CODE_SESSION_ID`, then the paths
+the SessionStart hook noted in `.session-log/.transcripts`, then the newest file in
+this repo's `~/.claude/projects/` folder; Codex by noted path, then the newest
+rollout from the last 2 days whose `session_meta.cwd` is this repo; Grok from
+`~/.grok/sessions/<url-encoded root>/prompt_history.jsonl` (newest session; no
+agent side). `auto` picks the harness from the environment and returns nothing
+under Cursor. Two Codex or Grok sessions open in one folder at once are not
+supported.
+
+`turns` writes no transcript text anywhere. It records the newest timestamp it
+showed in `.session-log/.turns-pending`; `save` moves that into
+`.session-log/.turns-cursor` (one line per transcript, newest 20) under its lock,
+so an abandoned save never skips turns. It needs python3; without it, or with no
+transcript, it prints one `relay:` line and the save goes ahead from memory.
+
 ## 7. Load operation (automatic at session start)
 
 `relay load` emits, in order:
@@ -203,19 +230,34 @@ covered in the learning design.
 1. A **recency line**: `Last saved: 2026-06-20 (today)`,
    `Last saved: 2026-06-18 (2 day(s) ago)`, or a ⚠ flag past 3 days
    (`⚠ Last saved: 2026-06-11 — 9 days ago`).
-2. **`latest.md` in full**, soft-capped at 800 words (`RELAY_WORD_CAP`), with a
+2. **Ready to become rules** (fresh starts only): graduation-ready lessons
+   (`sessions ≥ RELAY_GRADUATE_AT`, not deferred at their current count), at most
+   `RELAY_READY_MAX` (3) within `RELAY_READY_CAP` (600) words, ranked by sessions
+   then recency, with instructions to ask once about each before starting work.
+   These lessons are not repeated in the lessons list below.
+3. **`latest.md` in full**, soft-capped at 800 words (`RELAY_WORD_CAP`), with a
    truncation note pointing at the file if the cap is hit.
-3. **Durable knowledge**: facts and active lessons, every entry named by its id.
+4. **Durable knowledge**: facts and active lessons, every entry named by its id.
    The top-ranked entries appear in full under their own word budgets (so they
    cannot crowd out the handoff); the rest are listed by id in one `More` line.
    Truncation is always stated.
-4. **`index.md` verbatim**: the dated ≤ 10-day map.
-5. A closing pointer: the handoff and index are summaries; if the task touches
+5. **`index.md` verbatim**: the dated ≤ 10-day map.
+6. A closing pointer: the handoff and index are summaries; if the task touches
    an earlier day in the index, open `.session-log/history/<date>.md` first.
 
 Output format follows the CLI: plain text (`--format text`, the default), a
-Codex `hookSpecificOutput.additionalContext` JSON object (`--format codex`), or a
-top-level `systemMessage` JSON object (`--format grok`).
+`hookSpecificOutput.additionalContext` JSON object (`--format claude` and
+`--format codex`), or a top-level `systemMessage` JSON object (`--format grok`).
+For `claude` and `codex`, when the Ready block is shown, a top-level
+`systemMessage` adds a visible line for the user ("Relay: 2 lessons ready to
+become rules. I'll ask before we start.").
+
+The hooks pass their stdin JSON with `--hook-json <harness>`. A start is fresh
+when `source` is `startup`, `clear`, or absent; `resume` and `compact` load the
+handoff without the Ready block, so a compaction never interrupts work with the
+question. A `transcript_path` in the payload is noted in `.session-log/.transcripts`
+(one line per path, newest 20) for `relay turns`. Stdin is read with a 2-second
+timeout, so a hook pipe that never closes cannot hang session start.
 
 Load **never blocks**: with no `latest.md` it prints nothing and exits cleanly,
 and the hook wrappers swallow errors.
@@ -371,10 +413,12 @@ descriptive and brand-neutral.
 
 ## 17. Future
 
-- **Curation freeze.** No new knowledge subcommands until re-assertion is
-  visible in real stores: at least one lesson in some install reaching
-  `sessions: 2` by re-assertion of a loaded id. Check by listing `sessions:`
-  across installs.
+- **Curation freeze (lifted 2026-10-25).** The freeze held new knowledge
+  subcommands until re-assertion showed up in real stores. On 2026-10-25 talelog
+  had 12 lessons at `sessions ≥ 2` (top: 6), so it was lifted for exactly two
+  additions: `defer` and `graduate --rule`. The next check is whether ready
+  lessons now get decided at session start (spec
+  `docs/superpowers/specs/2026-10-25-graduation-and-correction-inbox-design.md` §10).
 
 - **L3 hook-automatic save:** a `SessionEnd` (Claude Code) / `Stop` (Codex) hook
   that writes the handoff from the session transcript when L1 and L2 did not

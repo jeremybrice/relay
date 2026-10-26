@@ -4,5 +4,5 @@
 set -euo pipefail
 ROOT="${GROK_WORKSPACE_ROOT:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
-"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok 2>/dev/null || true
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok --hook-json grok 2>/dev/null || true
 exit 0

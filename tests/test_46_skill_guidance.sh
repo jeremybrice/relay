@@ -26,4 +26,22 @@ for f in "$SRC/skills/relay-compact/SKILL.md" "$SRC/codex/skills/relay-compact/S
   assert_contains "$t" "<<'RELAY_BODY'"
   [ -z "$(printf '%s' "$t" | grep -F "'<rewritten body>'" || true)" ] || { echo "FAIL: $f still single-quotes the body"; exit 1; }
 done
-pass "skills: stdin bodies, lesson re-assertion by id, sharp lesson definition"
+# save reads the user's turns first (harnesses with a transcript); graduation moves to session start
+for f in "$SRC/skills/session-save/SKILL.md" "$SRC/codex/skills/session-save/SKILL.md"; do
+  t="$(cat "$f")"
+  assert_contains "$t" 'relay.sh" turns'
+  assert_contains "$t" "Read your turns first."
+done
+assert_contains "$(cat "$SRC/skills/session-save/SKILL.md")" "--harness auto"
+assert_contains "$(cat "$SRC/codex/skills/session-save/SKILL.md")" "--harness codex"
+for f in "$SRC"/skills/*/SKILL.md "$SRC"/codex/skills/*/SKILL.md "$SRC"/opencode/commands/*.md "$SRC"/*/AGENTS.relay.md; do
+  t="$(cat "$f")"
+  for old in "offer graduation in one line" "surface any graduation-ready lesson" "graduation only when prompted" "offer (one line) to run"; do
+    [ -z "$(printf '%s' "$t" | grep -F -- "$old" || true)" ] || { echo "FAIL: $f still offers graduation at wrap-up"; exit 1; }
+  done
+done
+for f in "$SRC"/*/AGENTS.relay.md; do assert_contains "$(cat "$f")" "asked about at session start"; done
+for f in "$SRC/skills/relay-compact/SKILL.md" "$SRC/codex/skills/relay-compact/SKILL.md" "$SRC/opencode/commands/relay-compact.md"; do
+  assert_contains "$(cat "$f")" "--rule -"
+done
+pass "skills: stdin bodies, lesson re-assertion by id, sharp lesson definition, turns first, graduation at start"

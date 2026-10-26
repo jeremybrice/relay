@@ -5,5 +5,5 @@
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
-"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex 2>/dev/null || true
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex --hook-json codex 2>/dev/null || true
 exit 0

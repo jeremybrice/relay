@@ -8,4 +8,5 @@ and index are summaries only.
 When wrapping up ("done for today" / "continue tomorrow"), run `$session-save` to
 persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.

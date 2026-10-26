@@ -27,4 +27,4 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>`, only with the user's okay.
+4. If a lesson is graduation-ready, tell the user it will be asked about at the next session start. Do not offer graduation now.

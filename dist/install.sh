@@ -15,28 +15,36 @@ RELAY_GRADUATED_SOFT="${RELAY_GRADUATED_SOFT:-8}"
 RELAY_LESSON_COLD_DAYS="${RELAY_LESSON_COLD_DAYS:-30}"
 RELAY_FACTS_MAX="${RELAY_FACTS_MAX:-40}"
 RELAY_LESSONS_MAX="${RELAY_LESSONS_MAX:-30}"
+RELAY_READY_MAX="${RELAY_READY_MAX:-3}"
+RELAY_READY_CAP="${RELAY_READY_CAP:-600}"
+RELAY_PYTHON="${RELAY_PYTHON:-python3}"
+READY_BLOCK="" READY_IDS="" READY_SHOWN=0   # set by _load_ready; read by _load_knowledge and the hook formats
 RELAY_FORMAT=2   # on-disk layout of .session-log/ (2 = table indexes). Bump on any change an older relay.sh would mangle.
 
 usage() {
-  echo "usage: relay.sh {load|save} [--dir DIR] [--format text|codex|grok] [--digest STR]" >&2
+  echo "usage: relay.sh {load|save|turns} [--dir DIR] [--format text|claude|codex|grok] [--fresh] [--hook-json claude|codex|grok] [--harness auto|claude|codex|grok] [--digest STR]" >&2
 }
 
 main() {
   local cmd="${1:-}"; [ $# -gt 0 ] && shift || true
   DATA="${RELAY_DIR:-$PWD/.session-log}"
   if [ "$cmd" = knowledge ]; then cmd_knowledge "$@"; return $?; fi
-  local format="text" digest=""
+  local format="text" digest="" fresh=0 hook="" harness="auto"
   while [ $# -gt 0 ]; do
     case "$1" in
       --dir)    [ $# -ge 2 ] || { echo "relay: --dir needs a value" >&2; return 2; };    DATA="$2";   shift 2;;
       --format) [ $# -ge 2 ] || { echo "relay: --format needs a value" >&2; return 2; }; format="$2"; shift 2;;
+      --fresh)  fresh=1; shift;;
+      --harness) [ $# -ge 2 ] || { echo "relay: --harness needs a value" >&2; return 2; }; harness="$2"; shift 2;;
+      --hook-json) case "${2:-}" in claude|codex|grok) hook="$2";; *) echo "relay: --hook-json needs claude, codex or grok" >&2; return 2;; esac; shift 2;;
       --digest) [ $# -ge 2 ] || { echo "relay: --digest needs a value" >&2; return 2; }; digest="$2"; shift 2;;
       *) echo "relay: unknown arg $1" >&2; usage; return 2;;
     esac
   done
   case "$cmd" in
-    load) cmd_load "$format";;
+    load) [ -n "$hook" ] && fresh="$(_hook_in "$hook")"; cmd_load "$format" "$fresh";;
     save) cmd_save "$digest";;
+    turns) cmd_turns "$harness";;
     *) usage; return 2;;
   esac
 }
@@ -128,9 +136,9 @@ _prune() { # keep the newest RELAY_WINDOW history files; glob order is ascending
   return 0
 }
 
-_json_escape() {
-  awk 'BEGIN{ORS=""}
-       { gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t");
+_json_escape() { # strip control bytes JSON forbids raw (keep tab, newline, CR), then escape
+  LC_ALL=C tr -d '\000-\010\013\014\016-\037' | awk 'BEGIN{ORS=""}
+       { gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); gsub(/\t/,"\\t"); gsub(/\r/,"\\r");
          if (NR>1) printf "\\n"; printf "%s", $0 }'
 }
 
@@ -157,6 +165,56 @@ _kblock() { # word cap; ranked "...<TAB>id<TAB>line" rows on stdin -> each line 
       if (words + n <= cap || shown == 0) { words += n; shown++; print line; next }
       more++; rest = rest (more > 1 ? ", " : "") id }
     END { if (more) printf "More (%d, by id; open with: relay knowledge why <id>): %s\n", more, rest }'
+}
+
+_hook_in() { # harness -> prints 1 for a fresh start, 0 otherwise; notes the transcript path for turns
+  local raw="" src tp
+  [ -t 0 ] || IFS= read -r -d '' -t 2 raw || true    # never hang on a pipe that does not close
+  src="$(printf '%s' "$raw" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  tp="$(printf '%s' "$raw" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  [ -n "$tp" ] && _note_transcript "$1" "$tp"
+  case "$src" in ''|startup|clear) echo 1;; *) echo 0;; esac
+}
+
+_note_transcript() { # harness path -> .transcripts keeps one line per path, newest 20 (scratch file, no lock)
+  local f="$DATA/.transcripts" line tmp
+  line="$(printf '%s\t%s' "$1" "$2")"
+  mkdir -p "$DATA"; tmp="$(mktemp)"
+  { [ -f "$f" ] && grep -vxF -- "$line" "$f"; printf '%s\n' "$line"; } | tail -n 20 > "$tmp" || true
+  mv "$tmp" "$f"
+}
+
+_ready_line() { # visible startup line for the user, empty when nothing is ready
+  [ "${READY_SHOWN:-0}" -gt 0 ] || return 0
+  if [ "$READY_SHOWN" = 1 ]; then printf "Relay: 1 lesson ready to become a rule. I'll ask before we start."
+  else printf "Relay: %s lessons ready to become rules. I'll ask before we start." "$READY_SHOWN"; fi
+}
+
+_load_ready() { # fresh start only: graduation-ready lessons, ranked, at most RELAY_READY_MAX within RELAY_READY_CAP words
+  READY_BLOCK="" READY_IDS="" READY_SHOWN=0
+  local kd="$DATA/knowledge" f id tmp rows
+  [ -d "$kd/lessons" ] || return 0
+  tmp="$(mktemp)"
+  for f in "$kd"/lessons/*.md; do
+    [ -e "$f" ] || continue
+    _is_ready "$f" || continue
+    id="$(_fm "$f" id)"
+    printf '%05d\t%09d\t%s\t- `%s` (sessions:%s): %s\n' "$(_fm "$f" sessions)" \
+      "$(( 999999 - $(_days_since "$(_fm "$f" last_seen)") ))" "$id" "$id" "$(_fm "$f" sessions)" \
+      "$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')" >> "$tmp"
+  done
+  if [ -s "$tmp" ]; then
+    rows="$(sort -t$'\t' -k1,1nr -k2,2nr "$tmp" | awk -F'\t' -v cap="$RELAY_READY_CAP" -v max="$RELAY_READY_MAX" '
+      { n = split($4, w, " ")
+        if (shown == 0 || (shown < max && words + n <= cap)) { words += n; shown++; ids = ids $3 " "; lines = lines $4 "\n"; next }
+        more++ }
+      END { printf "%d\t%s\n%s", shown, ids, lines
+            if (more) printf "(+%d more ready; they come up next session)\n", more }')"
+    READY_SHOWN="$(printf '%s\n' "$rows" | head -n1 | cut -f1)"
+    READY_IDS="$(printf '%s\n' "$rows" | head -n1 | cut -f2)"
+    READY_BLOCK="## Ready to become rules (ask before starting work)"$'\n'"These lessons have come up on 3+ separate days. Before acting on the user's first message, ask once about each: propose a one-line rule (240 characters max) and offer yes / edit / not yet / drop. Yes or edit: relay knowledge graduate <id> --rule - (rule on stdin). Not yet: relay knowledge defer <id>. Drop: relay knowledge supersede <id>. Use a multiple-choice question tool if you have one, otherwise a numbered list. If the user skips the question, record nothing."$'\n'"$(printf '%s\n' "$rows" | sed '1d')"
+  fi
+  rm -f "$tmp"
 }
 
 _load_knowledge() {
@@ -195,6 +253,7 @@ _load_knowledge() {
   for f in "$kd"/lessons/*.md; do
     [ -e "$f" ] || continue
     id="$(_fm "$f" id)"; seen="$(_fm "$f" seen)"; seen="${seen:-1}"
+    case " $READY_IDS " in *" $id "*) continue;; esac   # already asked about in the Ready block
     body="$(_body "$f" | tr '\n\t' '  ' | sed 's/ *$//')"
     age="$(_days_since "$(_fm "$f" last_seen)")"
     printf '%05d\t%09d\t%s\t- `%s`: %s (seen:%s, sessions:%s)\n' \
@@ -227,7 +286,7 @@ _load_knowledge() {
 }
 
 cmd_load() {
-  local format="${1:-text}" latest="$DATA/latest.md" idx="$DATA/index.md"
+  local format="${1:-text}" fresh="${2:-0}" latest="$DATA/latest.md" idx="$DATA/index.md"
   [ -f "$latest" ] || return 0
   local sdate today se st days n out
   sdate="$(sed -n 's/^date:[[:space:]]*//p' "$latest" | head -n1)"
@@ -247,6 +306,8 @@ cmd_load() {
   if [ "$(_format_have)" -gt "$RELAY_FORMAT" ]; then
     out="⚠ This .session-log was written by a newer Relay (format $(_format_have)); update .relay/ with install.sh --detect before saving."$'\n\n'"$out"
   fi
+  [ "$fresh" = 1 ] && _load_ready
+  [ -n "$READY_BLOCK" ] && out="$out$READY_BLOCK"$'\n\n'
   n="$(wc -w < "$latest" | tr -d ' ')"
   if [ "${n:-0}" -gt "$RELAY_WORD_CAP" ]; then
     out="$out$(awk -v cap="$RELAY_WORD_CAP" 'BEGIN{c=0}{c+=NF;print} c>=cap{print "\n…[truncated — open .session-log/latest.md for the full handoff]"; exit}' "$latest")"
@@ -257,14 +318,289 @@ cmd_load() {
   [ -n "$kblock" ] && out="$out"$'\n\n'"$kblock"
   [ -f "$idx" ] && out="$out"$'\n\n'"$(cat "$idx")"
   out="$out"$'\n\nThe handoff and index above are summaries. If the task touches work from an earlier day in the index, open .session-log/history/<date>.md before starting.'
-  if [ "$format" = "codex" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-      "$(printf '%s' "$out" | _json_escape)"
+  if [ "$format" = "codex" ] || [ "$format" = "claude" ]; then
+    local sys="" vis; vis="$(_ready_line)"
+    [ -n "$vis" ] && sys="$(printf '"systemMessage":"%s",' "$(printf '%s' "$vis" | _json_escape)")"
+    printf '{%s"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+      "$sys" "$(printf '%s' "$out" | _json_escape)"
   elif [ "$format" = "grok" ]; then
     printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$out" | _json_escape)"
   else
     printf '%s\n' "$out"
   fi
+}
+
+cmd_turns() { # print the user's turns since the last save, read from the harness's own transcript
+  local harness="$1" root
+  case "$harness" in auto|claude|codex|grok) ;; *) echo "relay: --harness needs auto, claude, codex or grok" >&2; return 2;; esac
+  command -v "$RELAY_PYTHON" >/dev/null 2>&1 || { echo "relay: turns needs python3; save from memory"; return 0; }
+  root="$(cd "$(dirname "$DATA")" 2>/dev/null && pwd -P)" || root="$PWD"
+  mkdir -p "$DATA"
+  _turns_py "$harness" "$root" "$DATA" || echo "relay: turns could not read the transcript; save from memory"
+  return 0
+}
+
+_turns_py() { # harness root data — locate, parse, format; writes only .turns-pending (path + timestamp)
+  "$RELAY_PYTHON" - "$@" <<'PY'
+import glob, json, os, re, sys
+from datetime import datetime
+
+harness, root, data = sys.argv[1:4]
+home = os.environ.get("HOME", "")
+cap = int(os.environ.get("RELAY_TURNS_CAP") or 1500)
+ACKS = {"ok", "okay", "k", "yes", "yep", "yeah", "sure", "go ahead", "continue", "proceed",
+        "do it", "perfect", "great", "thanks", "thank you", "sounds good", "looks good"}
+PASTE = re.compile(r"</?pasted_content[^>]*>")
+
+
+def records(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(o, dict):
+                yield o
+
+
+def noted(h):
+    out = []
+    try:
+        for line in open(os.path.join(data, ".transcripts"), encoding="utf-8"):
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2 and parts[0] == h and os.path.isfile(parts[1]):
+                out.append(parts[1])
+    except OSError:
+        pass
+    return out
+
+
+def newest(paths):
+    paths = [p for p in paths if os.path.isfile(p)]
+    return max(paths, key=os.path.getmtime) if paths else None
+
+
+def text_parts(content):
+    if isinstance(content, str):
+        return [content]
+    if not isinstance(content, list):
+        return []
+    return [str(c.get("text") or "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+
+
+def user_text(t):
+    t = t.strip()
+    if t.startswith("<") and not t.startswith("<pasted_content"):
+        return None
+    t = re.sub(r"^(\[Image #\d+\]\s*)+", "", PASTE.sub("", t)).strip()
+    return t or None
+
+
+# ---- Claude Code ----
+def find_claude():
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    paths = noted("claude")
+    if sid:
+        for p in paths:
+            if os.path.basename(p) == sid + ".jsonl":
+                return p
+        hits = glob.glob(os.path.join(home, ".claude", "projects", "*", sid + ".jsonl"))
+        if hits:
+            return hits[0]
+    if paths:
+        return newest(paths)
+    enc = re.sub(r"[^A-Za-z0-9]", "-", root)
+    return newest(glob.glob(os.path.join(home, ".claude", "projects", enc, "*.jsonl")))
+
+
+def parse_claude(path):
+    ev, agent = [], ""
+    for o in records(path):
+        if o.get("isSidechain") or o.get("isCompactSummary") or o.get("isVisibleInTranscriptOnly"):
+            continue   # sidechains, and the compaction summary Claude Code files as a user record
+        msg = o.get("message")
+        kind, content = o.get("type"), (msg if isinstance(msg, dict) else {}).get("content")
+        if kind == "assistant":
+            said = " ".join(text_parts(content)).strip()
+            if said:
+                agent = said
+        elif kind == "user" and not o.get("isMeta"):
+            ts = str(o.get("timestamp") or "")
+            for part in content if isinstance(content, list) else []:
+                if isinstance(part, dict) and part.get("type") == "tool_result" and part.get("is_error"):
+                    body = part.get("content")
+                    body = body if isinstance(body, str) else " ".join(text_parts(body))
+                    if "doesn't want to proceed" in body:
+                        reason = body.split("the user said:", 1)[1].strip() if "the user said:" in body else ""
+                        ev.append((ts, "reject", reason, ""))
+            for raw in text_parts(content):
+                u = user_text(raw)
+                if u:
+                    ev.append((ts, "user", u, agent))
+                    agent = ""
+    return ev
+
+
+# ---- Codex ----
+def find_codex():
+    paths = noted("codex")
+    if paths:
+        return newest(paths)
+    import time
+    recent, cut = [], time.time() - 2 * 86400
+    for p in glob.glob(os.path.join(home, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl")):
+        if os.path.getmtime(p) < cut:
+            continue
+        for o in records(p):
+            if o.get("type") == "session_meta":
+                cwd = (o.get("payload") or {}).get("cwd") or ""
+                if cwd and (cwd == root or os.path.realpath(cwd) == root):
+                    recent.append(p)
+                break
+    return newest(recent)
+
+
+def parse_codex(path):
+    # Older Codex logs typed prompts as user_message events; 0.163 logs them only as
+    # response_item user messages, next to injected AGENTS.md / environment blocks.
+    events, items, agent_e, agent_i = [], [], "", ""
+    for o in records(path):
+        pl, ts = o.get("payload"), str(o.get("timestamp") or "")
+        pl = pl if isinstance(pl, dict) else {}
+        if o.get("type") == "response_item" and pl.get("role") in ("assistant", "user"):
+            parts = [str(c.get("text") or "") for c in pl.get("content") or [] if isinstance(c, dict)
+                     and c.get("type") in ("output_text", "input_text")]
+            if pl["role"] == "assistant":
+                text = " ".join(parts).strip()
+                if text:
+                    agent_e = agent_i = text
+            else:   # per part: image wrappers and injected blocks drop out, the typed prompt stays
+                kept = [u for u in (user_text(t) for t in parts if not t.startswith("# AGENTS.md instructions")) if u]
+                if kept:
+                    items.append((ts, "user", " ".join(kept), agent_i))
+                    agent_i = ""
+        elif o.get("type") == "event_msg" and pl.get("type") == "user_message":
+            u = user_text(str(pl.get("message") or ""))
+            if u:
+                events.append((ts, "user", u, agent_e))
+                agent_e = ""
+    return events or items
+
+
+# ---- Grok (prompt history only: no agent side) ----
+def find_grok():
+    from urllib.parse import quote
+    base = os.environ.get("GROK_HOME") or os.path.join(home, ".grok")
+    p = os.path.join(base, "sessions", quote(root, safe=""), "prompt_history.jsonl")
+    return p if os.path.isfile(p) else None
+
+
+def parse_grok(path):
+    rows = list(records(path))
+    if not rows:
+        return []
+    sid = rows[-1].get("session_id")
+    return [(str(r.get("timestamp") or ""), "user", str(r.get("prompt") or "").strip(), "") for r in rows
+            if r.get("session_id") == sid and not r.get("is_bash") and str(r.get("prompt") or "").strip()]
+
+
+FINDERS = {"claude": (find_claude, parse_claude), "codex": (find_codex, parse_codex),
+           "grok": (find_grok, parse_grok)}
+
+
+def pick():
+    h = harness
+    if h == "auto":
+        env = os.environ
+        tool = [k for k in env if not k.endswith("_HOME")]   # *_HOME is profile config, not the running tool
+        if env.get("CLAUDECODE") == "1":
+            h = "claude"
+        elif any(k.startswith("CURSOR_") for k in tool):
+            return "cursor", None   # no transcript to read; never borrow another tool's session
+        elif any(k.startswith("CODEX_") for k in tool):
+            h = "codex"
+        elif any(k.startswith("GROK_") for k in tool):
+            h = "grok"
+    if h != "auto":
+        return h, FINDERS[h][0]()
+    found = [(n, f[0]()) for n, f in FINDERS.items()]
+    found = [x for x in found if x[1]]
+    return max(found, key=lambda x: os.path.getmtime(x[1])) if found else ("claude", None)
+
+
+# ---- format ----
+def clip(s):
+    w = s.split()
+    return " ".join(w) if len(w) <= 80 else " ".join(w[:60]) + " … " + " ".join(w[-20:])
+
+
+def hhmm(ts):
+    try:
+        return datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=__import__("datetime").timezone.utc).astimezone().strftime("%H:%M")
+    except ValueError:
+        return ts[11:16]
+
+
+def is_ack(t):
+    return re.sub(r"[^a-z ]", "", t.lower()).strip() in ACKS
+
+
+def main():
+    h, path = pick()
+    if not path:
+        print("relay: no transcript found for this session; save from memory")
+        return
+    since = ""
+    try:
+        for line in open(os.path.join(data, ".turns-cursor"), encoding="utf-8"):
+            p, _, t = line.rstrip("\n").partition("\t")
+            if p == path:
+                since = t
+    except OSError:
+        pass
+    ev = [e for e in FINDERS[h][1](path) if e[0] > since]
+    if not ev:
+        print("relay: no new turns since the last save")
+        return
+    acks = sum(1 for e in ev if e[1] == "user" and is_ack(e[2]))
+    lines = []
+    for ts, kind, text, ctx in ev:
+        if kind == "user" and is_ack(text):
+            continue
+        if kind == "reject":
+            body = 'you rejected a tool call: "%s"' % clip(text) if text else "you rejected a tool call"
+        elif ctx:
+            w = ctx.split()
+            said = ("…" if len(w) > 25 else "") + " ".join(w[-25:])
+            body = 'agent said: "%s" → you: "%s"' % (said, clip(text))
+        else:
+            body = 'you: "%s"' % clip(text)
+        lines.append("[%s] %s" % (hhmm(ts), body))
+    with open(os.path.join(data, ".turns-pending"), "w", encoding="utf-8") as f:
+        f.write("%s\t%s\n" % (path, max(e[0] for e in ev)))
+    if not lines:
+        print("relay: no new turns since the last save")
+        return
+    dropped = 0
+    while len(lines) > 1 and sum(len(l.split()) for l in lines) > cap:
+        lines.pop(0)
+        dropped += 1
+    head = "## Your turns this session (since %s; %d turns, %d acknowledgements not shown%s)" % (
+        hhmm(since) if since else "session start", len(lines) + dropped, acks,
+        ", %d older turns dropped" % dropped if dropped else "")
+    print(head)
+    print("(transcript: %s)" % path)
+    for i, l in enumerate(lines, 1):
+        print("%d. %s" % (i, l))
+
+
+try:
+    main()
+except Exception:
+    print("relay: turns could not read the transcript; save from memory")
+PY
 }
 
 cmd_save() {
@@ -287,8 +623,19 @@ cmd_save() {
   fi
   printf '%s\n' "$handoff" > "$DATA/latest.md"
   _index_update "$date" "$digest"
+  _turns_commit
   _prune
   _unlock
+}
+
+_turns_commit() { # (under the save lock) the turns read for this save are now saved: advance that transcript's cursor
+  local pend="$DATA/.turns-pending" cur="$DATA/.turns-cursor" path tmp
+  [ -f "$pend" ] || return 0
+  path="$(cut -f1 "$pend" | head -n1)"
+  tmp="$(mktemp)"
+  { [ -f "$cur" ] && awk -F'\t' -v p="$path" '$1 != p' "$cur"; head -n1 "$pend"; } | tail -n 20 > "$tmp" || true
+  mv "$tmp" "$cur"
+  rm -f "$pend"
 }
 
 _slugify() {
@@ -306,6 +653,19 @@ _fm_set() { # file key value  (whole-file atomic rewrite; only inside frontmatte
     /^---$/{d++}
     { if(d==1 && index($0,k": ")==1){ print k": "v; next } print }' "$1" > "$tmp"
   mv "$tmp" "$1"
+}
+
+_fm_put() { # file key value  (like _fm_set, but inserts the key before the closing --- when absent)
+  if grep -q "^$2: " "$1" 2>/dev/null; then _fm_set "$1" "$2" "$3"; return; fi
+  local tmp; tmp="$(mktemp)"
+  RELAY_K="$2" RELAY_V="$3" awk 'BEGIN{d=0} /^---$/{d++; if(d==2) print ENVIRON["RELAY_K"]": "ENVIRON["RELAY_V"]} {print}' "$1" > "$tmp"
+  mv "$tmp" "$1"
+}
+
+_is_ready() { # lesson file -> 0 when graduation-ready: sessions >= threshold and not deferred at this count
+  local s d; s="$(_fm "$1" sessions)"; d="$(_fm "$1" deferred_at)"
+  [ "${s:-1}" -ge "$RELAY_GRADUATE_AT" ] || return 1
+  [ -z "$d" ] || [ "${s:-1}" -gt "$d" ]
 }
 
 _body() { awk 'BEGIN{d=0} /^---$/{d++; next} d>=2{print}' "$1"; }
@@ -517,8 +877,23 @@ _block_upsert() { # file id body  (idempotent; replaces any existing id-block)
   rm -f "$bodyf"
 }
 
-k_graduate() {
-  local id; id="$(_slugify "${1:-}")"
+k_graduate() { # id [--rule TEXT|-]  (--rule: write one short line instead of the lesson body)
+  local id="" rule="" has_rule=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --rule) [ $# -ge 2 ] || { echo "relay: --rule needs a value (or - for stdin)" >&2; return 2; }
+              has_rule=1; if [ "$2" = - ]; then rule="$(cat)"; else rule="$2"; fi; shift 2;;
+      *) id="$1"; shift;;
+    esac
+  done
+  id="$(_slugify "$id")"
+  if [ "$has_rule" = 1 ]; then
+    local n; n="$(printf '%s' "$rule" | wc -m | tr -d ' ')"
+    case "$rule" in *$'\n'*) n=0;; esac
+    if [ "$n" -lt 1 ] || [ "$n" -gt 240 ]; then
+      echo "relay: --rule must be one line of 1 to 240 characters" >&2; return 2
+    fi
+  fi
   local f="$DATA/knowledge/lessons/$id.md"
   if [ ! -f "$f" ]; then
     [ -f "$DATA/knowledge/lessons/graduated/$id.md" ] && { echo "already graduated: $id"; return 0; }
@@ -526,7 +901,12 @@ k_graduate() {
   fi
   _lock || return 1
   local target; target="$(_instruction_file)"
-  _block_upsert "$target" "$id" "$(_body "$f")"
+  if [ "$has_rule" = 1 ]; then
+    _block_upsert "$target" "$id" "- $rule (why: relay knowledge why $id)"
+    _fm_put "$f" rule "$rule"
+  else
+    _block_upsert "$target" "$id" "$(_body "$f")"
+  fi
   _fm_set "$f" status graduated
   _fm_set "$f" graduated_to "$target"
   mkdir -p "$DATA/knowledge/lessons/graduated"
@@ -553,6 +933,7 @@ cmd_knowledge() {
     list)       k_list "$@";;
     graduate)   k_graduate "$@";;
     ungraduate) k_ungraduate "$@";;
+    defer)      k_defer "$@";;
     supersede)  k_supersede "$@";;
     prune)      k_prune "$@";;
     compact)    k_compact "$@";;
@@ -622,8 +1003,8 @@ _k_add_lesson() {
     _set_body "$f" "$body"
     echo "reinforced lesson: $id (seen:$seen sessions:$sess)"
     [ -n "$prev" ] && echo "  wording updated; previous kept in lessons/superseded/$(basename "$prev")"
-    if [ "$sess" -ge "$RELAY_GRADUATE_AT" ]; then
-      echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): propose 'relay knowledge graduate $id'"
+    if _is_ready "$f"; then
+      echo "  → graduation-ready (sessions:$sess ≥ $RELAY_GRADUATE_AT): it will be asked about at the next session start"
     fi
   else
     _write_lesson "$f" "$id" 1 1 "$today" "$today" "$(_provenance)" "$body"
@@ -678,6 +1059,18 @@ _block_remove() { # file id  (idempotent)
     BEGIN{ s="<!-- relay:learned:"id" -->"; e="<!-- /relay:learned:"id" -->"; skip=0 }
     { if($0==s){skip=1; next} if(skip==1){ if($0==e) skip=0; next } print }' "$file" > "$tmp"
   mv "$tmp" "$file"
+}
+
+k_defer() { # "not yet": hide a ready lesson until it is re-asserted on a later day
+  local id; id="$(_slugify "${1:-}")"
+  local f="$DATA/knowledge/lessons/$id.md"
+  [ -f "$f" ] || { echo "relay: no active lesson: $id" >&2; return 1; }
+  _lock || return 1
+  local sess; sess="$(_fm "$f" sessions)"; sess="${sess:-1}"
+  _fm_put "$f" deferred_at "$sess"
+  _kindex
+  _unlock
+  echo "deferred: $id (now sessions:$sess; comes back once re-asserted on a later day)"
 }
 
 k_ungraduate() {
@@ -830,7 +1223,7 @@ k_restore() {
 k_why() {
   local id; id="$(_slugify "${1:-}")"
   local f="" k
-  for k in facts lessons; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
+  for k in facts lessons lessons/graduated; do [ -f "$DATA/knowledge/$k/$id.md" ] && { f="$DATA/knowledge/$k/$id.md"; break; }; done
   [ -n "$f" ] || { echo "relay: no entry: $id" >&2; return 1; }
   echo "--- entry ---"; cat "$f"
   local src; src="$(_fm "$f" source)"
@@ -910,18 +1303,20 @@ continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer `/relay-compact` in one line — never run it unasked.
 RELAY_EOF
 }
 
 emit__adapters_claude_code_relay_session_start_sh() { cat <<'RELAY_EOF'
 #!/usr/bin/env bash
-# Claude Code SessionStart hook → prints the Relay handoff (stdout is injected into context).
+# Claude Code SessionStart hook → passes the hook JSON (stdin) to relay.sh, which emits
+# {systemMessage?, hookSpecificOutput:{additionalContext:<handoff>}} JSON.
 set -euo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
-"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" 2>/dev/null || true
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format claude --hook-json claude 2>/dev/null || true
 exit 0
 RELAY_EOF
 }
@@ -937,7 +1332,8 @@ and index are summaries only.
 When wrapping up ("done for today" / "continue tomorrow"), run `$session-save` to
 persist a new handoff; offer it if unsure.
 At wrap-up, also capture durable facts/lessons with `$relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 RELAY_EOF
 }
 
@@ -969,7 +1365,7 @@ emit__adapters_codex_relay_session_start_sh() { cat <<'RELAY_EOF'
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
-"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex 2>/dev/null || true
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format codex --hook-json codex 2>/dev/null || true
 exit 0
 RELAY_EOF
 }
@@ -997,7 +1393,8 @@ as `R` and `--dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1013,7 +1410,8 @@ RELAY_BODY
 
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Report final counts: `R knowledge list D`. (The session-start hook picks up
    the compacted store next session — no snapshot refresh needed.)
 
@@ -1054,7 +1452,7 @@ Capture one durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If a lesson is graduation-ready, offer to `knowledge graduate <slug>`, only with the user's okay.
+4. If a lesson is graduation-ready, tell the user it will be asked about at the next session start. Do not offer graduation now.
 RELAY_EOF
 }
 
@@ -1066,6 +1464,19 @@ description: Save a Relay handoff for the next Codex session
 ---
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" turns --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" --harness codex
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with `$relay-learn`. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections (`## Summary`, `## Changed`, `## Decisions`, `## Next`,
    `## Watch out`, `## Open questions`). Carry forward every still-open item from
    the loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
@@ -1093,8 +1504,9 @@ RELAY_BODY
    Restate the loaded text rather than paraphrasing it. If the lesson was listed
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
-5. Capture new durable knowledge with `$relay-learn` (skip if none). Offer
-   graduation only when prompted and approved.
+5. Capture new durable knowledge with `$relay-learn` (skip if none). If the tool says a lesson is
+   graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or the session-start load warned
    "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line. Never run it unasked.
 RELAY_EOF
@@ -1113,7 +1525,8 @@ continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer the `relay-compact` skill in one line.
 RELAY_EOF
 }
@@ -1131,7 +1544,8 @@ continue tomorrow", or a task completes and we're winding down), run the
 `session-save` skill to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with the `relay-learn` skill (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 If knowledge is over cap, offer the `relay-compact` skill in one line.
 RELAY_EOF
 }
@@ -1158,7 +1572,7 @@ emit__adapters_grok_relay_session_start_sh() { cat <<'RELAY_EOF'
 set -euo pipefail
 ROOT="${GROK_WORKSPACE_ROOT:-$PWD}"
 [ -x "$ROOT/.relay/relay.sh" ] || exit 0
-"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok 2>/dev/null || true
+"$ROOT/.relay/relay.sh" load --dir "$ROOT/.session-log" --format grok --hook-json grok 2>/dev/null || true
 exit 0
 RELAY_EOF
 }
@@ -1178,7 +1592,8 @@ continue tomorrow", or a task completes and we're winding down), run
 `/session-save` to persist a Relay handoff. If unsure the session is ending,
 offer it in one line.
 At wrap-up, also capture durable facts/lessons with `/relay-learn` (or inline
-`knowledge add`), and surface any graduation-ready lesson for the user to approve.
+`knowledge add`). Graduation-ready lessons are asked about at session start (the
+Ready block); never graduate without the user's yes.
 RELAY_EOF
 }
 
@@ -1208,7 +1623,8 @@ as `R` and `--dir "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log"` as `D` below.
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1224,7 +1640,8 @@ RELAY_BODY
 
      (reinforces the kept id, preserving its first_seen provenance)
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Refresh the snapshot opencode auto-loads next session:
 
    ```bash
@@ -1278,8 +1695,8 @@ RELAY_BODY
   > "${OPENCODE_PROJECT_DIR:-$PWD}/.session-log/relay-instructions.md"
 ```
 
-5. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+5. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 RELAY_EOF
 }
 
@@ -1319,7 +1736,8 @@ RELAY_BODY
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge with `/relay-learn` (skip if none). If the tool
-   says a lesson is graduation-ready, offer graduation in one line.
+   says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. Refresh the snapshot opencode auto-loads next session via `opencode.json`'s
    `instructions` field (run this after any knowledge writes too):
 
@@ -1375,7 +1793,8 @@ human-gated semantic pass. Use `"$PWD/.relay/relay.sh"` as `R` and
      VERIFY against the repo before declaring anything stale — never from
      memory alone.
    - Graduations: lessons with sessions >= 3 that are durable repo rules →
-     propose `knowledge graduate <id>`.
+     propose `knowledge graduate <id> --rule -` with a one-line
+     rule (240 characters max) drafted from the lesson.
    - Deletions: entries that no longer reflect the codebase with no merge
      target → propose `knowledge supersede <id>`.
 4. Present the plan to the user. Apply NOTHING until approved. Graduations
@@ -1390,7 +1809,8 @@ RELAY_BODY
 ```
 
    - absorbed/deleted ids: `R knowledge supersede <id> D`
-   - approved graduations: `R knowledge graduate <id> D`
+   - approved graduations (the approved rule on stdin, closing `RELAY_BODY` at the
+     start of its line): `R knowledge graduate <id> --rule - D <<'RELAY_BODY'`
 6. Report final counts: `R knowledge list D`. The next session picks up the
    compacted store when it reads `.session-log/`. No snapshot refresh.
 
@@ -1437,8 +1857,8 @@ Capture a single durable piece of knowledge about THIS repo for future sessions.
 RELAY_BODY
 ```
 
-4. If the tool reports a lesson is graduation-ready, offer (one line) to run
-   `knowledge graduate <slug>`. Never graduate without the user's okay.
+4. If the tool reports a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 
 Do not write `.session-log/relay-instructions.md`. Session start reads
 `.session-log/latest.md` and `.session-log/index.md` only.
@@ -1453,6 +1873,19 @@ description: Save a Relay handoff so the next session can pick up where you left
 
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"$PWD/.relay/relay.sh" turns --dir "$PWD/.session-log" --harness auto
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with the `relay-learn` skill. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections as concise markdown (`## Summary`, `## Changed`,
    `## Decisions`, `## Next`, `## Watch out`, `## Open questions`), naming real
    files/paths and dated facts. Carry forward every still-open item from the
@@ -1486,8 +1919,8 @@ RELAY_BODY
    Re-asserting on a new day is what moves a lesson toward graduation. Do not
    re-assert a lesson only because it was loaded.
 5. Capture new durable knowledge from this session (skip if none) with the
-   `relay-learn` skill. If the tool says a lesson is graduation-ready, offer
-   graduation in one line. Never graduate without the user's okay.
+   `relay-learn` skill. If the tool says a lesson is graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or a load warned
    "(⚠ N ... over cap ...)"), offer `relay-compact` in one line.
    Never run it unasked.

@@ -5,6 +5,19 @@ description: Save a Relay handoff for the next Codex session
 ---
 Persist a Relay handoff for the next agent.
 
+0. Read your turns first. Run:
+
+```bash
+"${CODEX_PROJECT_DIR:-$PWD}/.relay/relay.sh" turns --dir "${CODEX_PROJECT_DIR:-$PWD}/.session-log" --harness codex
+```
+
+   Read it for corrections: places where the user rejected, redirected, or said
+   something was not working, and what they settled on. For each, ask: would this
+   apply next week, on a different task? If yes, it is a lesson (a behavior: when X,
+   do Y, because Z) or a fact (a truth about the repo). If it matches a loaded
+   lesson, re-assert that id; otherwise add a new one with `$relay-learn`. One-off redirects
+   about the task at hand are not lessons. Use the turns for the handoff's
+   Decisions too. If it prints a one-line `relay:` message instead, save from memory.
 1. Author the six sections (`## Summary`, `## Changed`, `## Decisions`, `## Next`,
    `## Watch out`, `## Open questions`). Carry forward every still-open item from
    the loaded handoff's `## Next` and `## Open questions`: this handoff replaces it.
@@ -32,7 +45,8 @@ RELAY_BODY
    Restate the loaded text rather than paraphrasing it. If the lesson was listed
    only by id, open it first with `relay.sh knowledge why <id>` (same `--dir`).
    Do not re-assert a lesson only because it was loaded.
-5. Capture new durable knowledge with `$relay-learn` (skip if none). Offer
-   graduation only when prompted and approved.
+5. Capture new durable knowledge with `$relay-learn` (skip if none). If the tool says a lesson is
+   graduation-ready, tell the user it will be asked
+   about at the next session start. Do not offer graduation now.
 6. If `knowledge list` reports counts over cap (or the session-start load warned
    "(⚠ N ... over cap ...)"), offer `$relay-compact` in one line. Never run it unasked.
