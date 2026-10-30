@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 340" role="img" aria-labelledby="title desc">
+  <title id="title">The Relay session loop</title>
+  <desc id="desc">At the end of a session, save writes a handoff, facts, and lessons into .session-log. At the start of the next session, they load automatically. Every session hands off to the next.</desc>
+  <style>
+    .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .h { font-size: 17px; font-weight: 600; }
+    .b { font-size: 14px; }
+    .bb { font-size: 14px; font-weight: 600; }
+    .s { font-size: 12.5px; fill: #59636e; }
+    .card { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; }
+    .ln { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .dash { stroke-dasharray: 6 5; }
+    .blue { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.5; }
+    .green { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.5; }
+    .purple { fill: #fbefff; stroke: #8250df; stroke-width: 1.5; }
+    .gray { fill: #ffffff; stroke: #d1d9e0; stroke-width: 1.5; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8c959f"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" rx="12" fill="#ffffff"/>
+
+  <!-- Today's session -->
+  <rect class="card" x="20" y="40" width="240" height="220" rx="12"/>
+  <text class="t h" x="40" y="72">This session</text>
+  <rect class="gray" x="76" y="90" width="168" height="30" rx="8"/>
+  <text class="t b" x="232" y="110" text-anchor="end">fix the flaky export</text>
+  <rect class="gray" x="36" y="130" width="168" height="30" rx="8"/>
+  <text class="t b" x="48" y="150">done, tests pass</text>
+  <rect class="purple" x="76" y="170" width="168" height="30" rx="8"/>
+  <text class="t b" x="232" y="190" text-anchor="end">no, use release.sh</text>
+  <text class="t s" x="40" y="232">you work, decide, correct</text>
+
+  <!-- save arrow -->
+  <line class="ln" x1="264" y1="150" x2="349" y2="150" marker-end="url(#arrow)"/>
+  <text class="t bb" x="306" y="138" text-anchor="middle">save</text>
+  <text class="t s" x="306" y="172" text-anchor="middle">at wrap-up</text>
+
+  <!-- .session-log store -->
+  <rect class="card" x="355" y="20" width="230" height="262" rx="12"/>
+  <text class="t h m" x="375" y="52">.session-log/</text>
+  <text class="t s" x="375" y="72">local · git-ignored · markdown</text>
+  <rect class="blue" x="371" y="88" width="198" height="54" rx="9"/>
+  <text class="t bb" x="387" y="111">Handoff</text>
+  <text class="t s" x="387" y="130">what happened, last 10 days</text>
+  <rect class="green" x="371" y="150" width="198" height="54" rx="9"/>
+  <text class="t bb" x="387" y="173">Facts</text>
+  <text class="t s" x="387" y="192">what is true in this repo</text>
+  <rect class="purple" x="371" y="212" width="198" height="54" rx="9"/>
+  <text class="t bb" x="387" y="235">Lessons</text>
+  <text class="t s" x="387" y="254">how to work here</text>
+
+  <!-- load arrow -->
+  <line class="ln" x1="589" y1="150" x2="674" y2="150" marker-end="url(#arrow)"/>
+  <text class="t bb" x="631" y="138" text-anchor="middle">load</text>
+  <text class="t s" x="631" y="172" text-anchor="middle">automatic</text>
+
+  <!-- Next session -->
+  <rect class="card" x="680" y="40" width="240" height="220" rx="12"/>
+  <text class="t h" x="700" y="72">Next session</text>
+  <text class="t s" x="700" y="96">starts already knowing</text>
+  <circle cx="708" cy="124" r="6" fill="#0969da"/>
+  <text class="t b" x="722" y="129">the last handoff</text>
+  <circle cx="708" cy="154" r="6" fill="#1a7f37"/>
+  <text class="t b" x="722" y="159">facts about the repo</text>
+  <circle cx="708" cy="184" r="6" fill="#8250df"/>
+  <text class="t b" x="722" y="189">lessons, incl. that correction</text>
+  <circle cx="708" cy="214" r="6" fill="#8c959f"/>
+  <text class="t b" x="722" y="219">what happened each day</text>
+
+  <!-- loop back -->
+  <path class="ln dash" d="M800,264 L800,304 L140,304 L140,266" marker-end="url(#arrow)"/>
+  <text class="t s" x="470" y="326" text-anchor="middle">every session hands off to the next</text>
+</svg>

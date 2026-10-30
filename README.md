@@ -1,232 +1,70 @@
-# Relay — portable session handoff + learning
+# Relay
 
-Relay gives AI coding agents a memory that survives between sessions, in **any**
-repo it lives in. It does two things, side by side:
+**Memory for AI coding agents that lasts between sessions.** When a session ends,
+Relay saves a handoff along with what the agent learned. The next session starts
+already knowing both. It works in any repo, with Claude Code, Codex, Cursor,
+OpenCode, and Grok Build.
 
-- **Hands off** — at the end of a session it writes a structured handoff so the
-  next session (or the next agent) picks up where you left off.
-- **Learns** — it accumulates durable facts and behavioral lessons about working
-  in this repo, and lessons that keep recurring can graduate into the repo's
-  instruction file as standing rules.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/session-loop-dark.svg">
+  <img alt="Save writes a handoff, facts, and lessons into .session-log; the next session loads them automatically." src="docs/img/session-loop-light.svg" width="100%">
+</picture>
 
-It is **deterministic, daemon-free, local-only, and cross-harness** — one tool
-that works the same under Claude Code and Codex, built on a single
-zero-dependency bash helper (`relay.sh`).
+## Install
 
-## Two tiers
-
-| Tier | What it holds | Answers | Lifespan |
-| --- | --- | --- | --- |
-| **1 · Ephemeral handoffs** | A 6-section handoff per session (Summary / Changed / Decisions / Next / Watch-out / Open questions), a one-line-per-day index, a dated history file. | *"What happened recently?"* | Rolling 10-day window, then pruned. |
-| **2 · Durable knowledge** | Facts and lessons captured at the same save moment. | *"What's permanently true, and what have I learned here?"* | Never pruned. |
-
-## How it works — the division of labor
-
-This is Relay's core invariant and what keeps it portable:
-
-- **`relay.sh` (the deterministic core)** owns every write, merge, dedup, counter
-  bump, and prune — all under a portable `mkdir` lock. The agent never edits the
-  data files directly, which is what makes the counters trustworthy and
-  graduation idempotent.
-- **The agent** owns judgment and prose: is this durable? does it match an
-  existing lesson? what's the stable id? It authors; the helper records.
-- **Adapters stay thin** — per harness they wire the trigger (a `SessionStart`
-  hook), the context-injection field, and the thin save/learn commands, then call
-  the same core. Swap an adapter without touching the core.
-- **The data is just markdown** — fully readable with no adapter at all.
-
-## Install (in any repo)
-
-From the root of the repo you want Relay in:
+From the root of any repo:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash
 ```
 
-Pass flags after `bash -s --`:
+It asks which CLIs to set up and only adds files. Nothing you already have gets
+rewritten. Commit the new `.relay/` folder. Your handoffs stay local in
+`.session-log/`, which is git-ignored.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --clis claude,cursor   # no prompt
-curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --detect              # only CLIs already present
-```
-
-Or download it, read it, then run it: `curl -fsSLO https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh && bash install.sh`.
-
-With a local clone of this repo, run the source installer instead (same flags):
-
-```bash
-bash ~/Documents/GitHub/relay/install.sh
-```
-
-The installer asks which CLIs to set up (Claude Code, Codex, OpenCode, Cursor, Grok Build),
-with any already present in the repo pre-checked. Toggle by number, `a` for all,
-Enter to finish. Without a terminal it falls back to `--detect`. It then lays down
-`.relay/` (the tool — committed, travels via git), wires a session-start load plus
-save commands for each chosen CLI, gitignores `.session-log/` (your handoffs and
-knowledge — local only), and appends one labeled block per CLI to `AGENTS.md`
-(Claude Code reads it too). It is additive, idempotent, and reversible — nothing
-existing is rewritten. Re-installing over an older install moves Claude Code's block
-out of `CLAUDE.md` into `AGENTS.md`, leaving the rest of `CLAUDE.md` untouched.
-
-Each block also tells the agent that the handoff and index are summaries: when the
-task touches work from an earlier day, it should open that day's
-`.session-log/history/<date>.md` before starting.
-
-| CLI | Load at session start | Save / learn / compact |
-|-----|-----------------------|------------------------|
-| Claude Code | `SessionStart` hook in `.claude/settings.json` + `AGENTS.md` block | `.claude/skills/` → `/session-save`, `/relay-learn`, `/relay-compact` |
-| Codex | `SessionStart` hook in `.codex/hooks.json` (run `/hooks` once to trust it) + `AGENTS.md` fallback | `.codex/skills/` → `$session-save`, `$relay-learn`, `$relay-compact` |
-| OpenCode | `instructions` snapshot in `opencode.json` | `.opencode/commands/` → `/session-save`, `/relay-learn`, `/relay-compact` |
-| Cursor | `AGENTS.md` block (reads `.session-log/latest.md` + `index.md`) | `.cursor/skills/` → `session-save`, `relay-learn`, `relay-compact` |
-| Grok Build | `.grok/hooks/relay.json` (run `/hooks-trust` once) + `AGENTS.md` block | `.grok/skills/` → `session-save`, `relay-learn`, `relay-compact` |
-
-Claude Code, Cursor, and Grok share one skill set (`adapters/skills/`). Every
-install also ships `.relay/tests/smoke-compact.sh`, the contract test for
-`knowledge compact` / `restore`.
-
-To run the full suite from a checkout: `bash tests/run.sh` (CI runs it on Ubuntu and macOS).
-
-## Update (repos that already have Relay)
-
-There is no separate update command: re-run the installer with `--detect` from the
-repo root. It replaces `.relay/relay.sh`, rewrites each CLI's `AGENTS.md` block in
-place, and leaves `.session-log/` alone.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jeremybrice/relay/main/dist/install.sh | bash -s -- --detect
-# or, from a local clone (installs whatever branch the clone is on):
-bash ~/Documents/GitHub/relay/install.sh --detect
-```
-
-Then commit the updated `.relay/` so other machines pick it up.
-
-Update before the next save after the index switched to tables: an older
-`relay.sh` keeps only the old one-line index entries and would drop the table rows.
-
-From this version on, `.session-log/.relay-format` records the data layout. A
-`relay.sh` older than the data refuses to write and tells you to update, instead
-of mangling the files.
+To update, run the same line with `bash -s -- --detect`. For flags, per-CLI
+wiring, and update notes, see the [reference](docs/reference.md#install).
 
 ## Use
 
-- **Load** is automatic: the last handoff, active knowledge, and the index are
-  injected at session start. Every knowledge entry is named by its id. The
-  top-ranked entries appear in full under their own word budget (so knowledge
-  can't crowd out the handoff), and the rest are listed by id
-  (`relay knowledge why <id>` opens one), so nothing is silently dropped.
-- **Ready to become rules**: on a fresh start (not after a compaction or a
-  resume), up to 3 graduation-ready lessons appear above the handoff, and the
-  agent asks you once about each before it starts work: yes, edit, not yet, or
-  drop. Claude Code and Codex also show a one-line notice when any are ready.
-- **Save** with `/session-save` (Claude Code) or `$session-save` (Codex) — or the
-  agent offers when you wrap up. One reflection routes into three destinations:
-  the handoff, any new facts, and any new/reinforced lessons. Before writing,
-  the agent runs `relay turns`, which reads your own turns since the last save
-  back from the tool's transcript (Claude Code, Codex, Grok), so a correction
-  made hours earlier, or before a compaction, can still become a lesson.
-  Nothing from the transcript is stored.
-- **Learn mid-session** with `/relay-learn` (`$relay-learn` on Codex) to capture a
-  fact or lesson the moment it comes up.
+| When | What to do |
+|---|---|
+| **Start** | Nothing to do. The last handoff and what Relay knows load on their own. |
+| **Save** | Run `/session-save` when you wrap up (`$session-save` in Codex), or say you're done and the agent offers. |
+| **Learn** | Run `/relay-learn` to capture a fact or lesson as soon as it comes up. |
 
-## Knowledge model — facts vs lessons
+When you save, the agent reads back your own messages since the last save, so a
+correction you made hours ago can still become a lesson.
 
-The two kinds are not cosmetic: facts are *looked up*, lessons are *acted on* and
-can harden into rules.
+## Lessons become rules
 
-- **Facts** — reference truths about the repo (e.g. *"deploys ship via
-  `scripts/release.sh`, never `npm publish`"*). Carry a `confirmed` counter
-  (reinforcement proxy) and an optional `ttl` for freshness. On a divergent
-  rewrite they raise a **conflict** rather than silently overwriting — you pick a
-  side with `resolve --keep new|existing` (defaults to keeping the existing fact).
-  Restating a fact in similar words updates it to the newest wording and keeps
-  the previous version in `facts/superseded/`. Facts **never graduate**.
-- **Lessons** — behavioral patterns (*when X → prefer Y, because Z*). Carry a
-  `seen` count plus a `sessions` count of **distinct dates**. Lessons can
-  graduate.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/lesson-lifecycle-dark.svg">
+  <img alt="A lesson is noticed, reinforced on a new day, and ready after three separate days; you then decide whether it becomes a rule in AGENTS.md." src="docs/img/lesson-lifecycle-light.svg" width="100%">
+</picture>
 
-## Lesson lifecycle
+A lesson has to come up on three different days before Relay suggests turning it
+into a rule. You approve every rule before it's written.
 
-A lesson advances by a counter and a threshold, ending in a gated append — no
-confidence math, no decay scheduler:
+## Who does what
 
-1. **Noticed** — captured at save (`sessions: 1`).
-2. **Reinforced** — re-asserted on a *new day*; same-day repeats don't count, so a
-   coincidence seen three times in one afternoon can't masquerade as a pattern.
-3. **Ready** — at `sessions ≥ 3` (configurable via `RELAY_GRADUATE_AT`). It is
-   asked about at the next fresh session start, never at wrap-up.
-4. **Graduated** — the agent proposes a one-line rule (240 characters max), you
-   say yes or reword it, and the rule is written as an id-keyed block into
-   `AGENTS.md` (or `CLAUDE.md`, if it already holds graduated rules) where the
-   harness loads it natively, with a pointer to the full lesson
-   (`relay knowledge why <id>`). This step is always gated — it's a persistent,
-   behavior-changing edit to a file you may commit.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/division-of-labor-dark.svg">
+  <img alt="Thin adapters connect each CLI; the agent decides what to keep and calls relay.sh, which does every write into .session-log." src="docs/img/division-of-labor-light.svg" width="100%">
+</picture>
 
-"Not yet" (`knowledge defer <id>`) hides a ready lesson until it is re-asserted on
-a later day, so it only comes back with new evidence. "Drop" retires it with
-`knowledge supersede <id>`. Skipping the question records nothing; it comes up
-again next session.
+The agent decides what's worth keeping, and `relay.sh` does every write. That
+split keeps the counters honest and lets the same core run under every CLI.
 
-A graduated rule that goes stale is drained with `knowledge ungraduate <id>`; a
-wrong lesson or fact is retired with `knowledge supersede <id>`. Nothing is ever
-silently orphaned.
+## What it isn't
 
-## Command surface
+- **No daemon.** Nothing runs in the background. Relay acts at session start and
+  when you or the agent call it.
+- **No cloud.** Everything stays as plain markdown in your repo.
+- **No scoring math.** A lesson is ready once it has come up on three separate
+  days.
 
-Every write is a `relay.sh` subcommand:
+---
 
-```bash
-relay knowledge add --fact   --near "…"          # show matching ids, write nothing
-relay knowledge add --fact   --id <slug> "…"     # create / confirm / or raise conflict
-relay knowledge add --lesson --id <slug> "…"     # create / bump seen + sessions
-relay knowledge add --fact --id <slug> - <<'EOF' # body on stdin (quote-safe)
-relay knowledge graduate <id> --rule - <<'EOF'   # write a one-line rule for a ready
-                                                 #   lesson into the instruction file (gated)
-relay knowledge defer <id>                       # "not yet": wait for a later-day re-assertion
-relay turns --harness auto|claude|codex|grok     # print your turns since the last save
-                                                 #   (read-only; writes no transcript text)
-```
-
-`knowledge add` rejects unknown options and more than one body argument, so a
-mistyped flag or an unquoted body can never be stored in place of the text.
-
-Curation verbs round out the surface — `resolve --keep new|existing` (settle a
-conflict), `supersede <id>` (retire an entry), `prune --yes` (retire stale facts),
-`ungraduate <id>`, `why <id>` (show provenance), `list`, and `export`. See the
-design walkthrough for the full reference.
-
-## What it deliberately isn't
-
-Relay keeps the *idea* of a learning system — capture → reinforce → graduate — and
-drops the machinery a dogfood repo won't have:
-
-- No cron, background capture, or batch analyzer.
-- No time-decay (no scheduler to run it) — staleness is handled by lazy TTL checks
-  at load and by deliberate `supersede`.
-- No confidence-score math — just the `seen`/`sessions` counter and a threshold.
-- No committed/shared or cross-repo store yet (the config switch is reserved). The
-  one thing that travels today is a *graduated* lesson, because the instruction
-  file is yours to commit.
-
-## Layout
-
-```
-.relay/              committed · the tool travels via git
-  relay.sh           the deterministic core (load · save · knowledge …)
-  adapters/          templates the installer wires from
-
-.session-log/        git-ignored · local-only
-  latest.md          newest single-session handoff
-  index.md           table, one row per day, ≤ 10 days
-  .relay-format      data layout version (an older relay.sh refuses to write)
-  history/           one file per day, last 10 (older pruned)
-  knowledge/         durable, never pruned
-    index.md         derived cache — rebuilt from entry files every locked op
-    facts/<id>.md    one file per fact   (+ superseded/ tombstones)
-    lessons/<id>.md  one file per lesson (+ graduated/, superseded/)
-
-AGENTS.md              gains a <!-- relay:learned --> block for graduated lessons
-```
-
-Full design walkthrough:
-[`docs/relay-learning-design.html`](docs/relay-learning-design.html) — this README
-is a distilled subset. Design spec and review history live under `docs/`.
+[Reference](docs/reference.md) · [Design spec](docs/design-spec.md) ·
+[Design walkthrough](docs/relay-learning-design.html)

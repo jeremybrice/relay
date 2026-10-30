@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 340" role="img" aria-labelledby="title desc">
+  <title id="title">Who does what in Relay</title>
+  <desc id="desc">Thin adapters connect each CLI to Relay: a session-start hook calls relay.sh to load, and save and learn skills guide the agent. The agent decides what is worth keeping and calls relay.sh, which does every write into .session-log as plain markdown.</desc>
+  <style>
+    .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .m { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .h { font-size: 17px; font-weight: 600; }
+    .b { font-size: 14px; }
+    .bb { font-size: 14px; font-weight: 600; }
+    .s { font-size: 12.5px; fill: #59636e; }
+    .card { fill: #f6f8fa; stroke: #d1d9e0; stroke-width: 1.5; }
+    .ln { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .blue { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.5; }
+    .orange { fill: #fff1e5; stroke: #bc4c00; stroke-width: 1.5; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8c959f"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" rx="12" fill="#ffffff"/>
+
+  <!-- CLIs -->
+  <rect class="card" x="63" y="20" width="150" height="40" rx="20"/>
+  <text class="t b" x="138" y="45" text-anchor="middle">Claude Code</text>
+  <rect class="card" x="229" y="20" width="150" height="40" rx="20"/>
+  <text class="t b" x="304" y="45" text-anchor="middle">Codex</text>
+  <rect class="card" x="395" y="20" width="150" height="40" rx="20"/>
+  <text class="t b" x="470" y="45" text-anchor="middle">Cursor</text>
+  <rect class="card" x="561" y="20" width="150" height="40" rx="20"/>
+  <text class="t b" x="636" y="45" text-anchor="middle">OpenCode</text>
+  <rect class="card" x="727" y="20" width="150" height="40" rx="20"/>
+  <text class="t b" x="802" y="45" text-anchor="middle">Grok Build</text>
+
+  <!-- adapter bracket -->
+  <path class="ln" d="M138,60 L138,76 M304,60 L304,76 M470,60 L470,76 M636,60 L636,76 M802,60 L802,76 M138,76 L802,76"/>
+  <line class="ln" x1="260" y1="76" x2="260" y2="124" marker-end="url(#arrow)"/>
+  <line class="ln" x1="680" y1="76" x2="680" y2="124" marker-end="url(#arrow)"/>
+  <text class="t bb" x="470" y="100" text-anchor="middle">thin adapters, one per CLI</text>
+  <text class="t s" x="250" y="106" text-anchor="end">save / learn skills</text>
+  <text class="t s" x="690" y="106">session-start hook</text>
+
+  <!-- agent -->
+  <rect class="blue" x="110" y="130" width="300" height="114" rx="12"/>
+  <text class="t h" x="130" y="160">The agent decides</text>
+  <text class="t s" x="130" y="186">is this worth keeping?</text>
+  <text class="t s" x="130" y="206">fact or lesson? new or seen before?</text>
+  <text class="t s" x="130" y="226">writes the words</text>
+
+  <line class="ln" x1="412" y1="187" x2="524" y2="187" marker-end="url(#arrow)"/>
+  <text class="t s" x="468" y="178" text-anchor="middle">calls</text>
+
+  <!-- relay.sh -->
+  <rect class="orange" x="530" y="130" width="300" height="114" rx="12"/>
+  <text class="t h" x="550" y="160"><tspan class="m">relay.sh</tspan> records</text>
+  <text class="t s" x="550" y="186">every write, merge, and counter</text>
+  <text class="t s" x="550" y="206">dedup and prune, under a lock</text>
+  <text class="t s" x="550" y="226">one bash file, no dependencies</text>
+
+  <!-- data -->
+  <line class="ln" x1="680" y1="246" x2="680" y2="272" marker-end="url(#arrow)"/>
+  <rect class="card" x="530" y="278" width="300" height="48" rx="12"/>
+  <text class="t bb m" x="550" y="307">.session-log/</text>
+  <text class="t s" x="668" y="307">plain markdown</text>
+
+  <text class="t s" x="130" y="298">Same core under every CLI.</text>
+  <text class="t s" x="130" y="316">Swap an adapter; the core stays.</text>
+</svg>
