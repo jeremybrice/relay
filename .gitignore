@@ -6,3 +6,17 @@
 # source of truth for adapters lives in adapters/
 .relay/
 .claude/
+
+# Kept local only: development and design material, not part of the shipped product.
+# The public repo is the product: README, relay.sh, install.sh, dist/, adapters/,
+# docs/reference.md, docs/img/*.svg.
+.DS_Store
+AGENTS.md
+bundle.sh
+tests/
+.github/
+docs/superpowers/
+docs/design-spec.md
+docs/relay-learning-design.html
+docs/evaluations/
+docs/img/make-dark.sh

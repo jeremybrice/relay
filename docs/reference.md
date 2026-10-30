@@ -1,8 +1,6 @@
 # Relay reference
 
-The details behind the [README](../README.md). For the reasoning behind each
-choice, see the [design spec](design-spec.md) and the
-[design walkthrough](relay-learning-design.html).
+The details behind the [README](../README.md).
 
 - [Install](#install)
 - [Update](#update)
@@ -14,7 +12,6 @@ choice, see the [design spec](design-spec.md) and the
 - [Layout](#layout)
 - [Design rules](#design-rules)
 - [What it deliberately isn't](#what-it-deliberately-isnt)
-- [Development](#development)
 
 ## Install
 
@@ -245,16 +242,3 @@ drops the machinery a dogfood repo won't have:
 - No committed/shared or cross-repo store yet (the config switch is reserved).
   The one thing that travels today is a *graduated* lesson, because the
   instruction file is yours to commit.
-
-## Development
-
-```bash
-bash tests/run.sh             # full suite (CI runs it on Ubuntu and macOS)
-bash tests/smoke-compact.sh   # compact / restore contract test
-bash bundle.sh                # regenerate dist/install.sh after editing relay.sh, install.sh, or adapters/
-```
-
-CI fails if `dist/install.sh` differs from the sources.
-
-The README diagrams live in `docs/img/`. Edit only the `*-light.svg` files, then
-run `bash docs/img/make-dark.sh` to regenerate the dark versions.

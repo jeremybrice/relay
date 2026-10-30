@@ -1,8 +1,0 @@
-{"timestamp": "2026-10-25T15:00:00.000Z", "type": "session_meta", "payload": {"id": "c1", "cwd": "__ROOT__"}}
-{"timestamp": "2026-10-25T15:00:00.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>\n  <cwd>__ROOT__</cwd>\n</environment_context>"}]}}
-{"timestamp": "2026-10-25T15:01:00.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I set the timeout to 30 seconds in config.toml as requested earlier."}]}}
-{"timestamp": "2026-10-25T15:02:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "no that's too long, make it 10"}}
-{"timestamp": "2026-10-25T15:02:00.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "no that's too long, make it 10"}]}}
-{"timestamp": "2026-10-25T15:03:00.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Changed it to 10 seconds."}]}}
-{"timestamp": "2026-10-25T15:04:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "great"}}
-{"timestamp": "2026-10-25T15:05:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "now lets also log the retry count"}}
