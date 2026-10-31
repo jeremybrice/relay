@@ -66,5 +66,4 @@ split keeps the counters honest and lets the same core run under every CLI.
 
 ---
 
-[Reference](docs/reference.md) · [Design spec](docs/design-spec.md) ·
-[Design walkthrough](docs/relay-learning-design.html)
+[Reference](docs/reference.md)
